@@ -1,0 +1,17 @@
+# State: nunca al repositorio
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Caché de providers y módulos
+.terraform/
+
+# Variables con valores locales
+*.tfvars
+!example.tfvars
+
+# Planes guardados
+*.tfplan
+
+# Sistema
+.DS_Store
