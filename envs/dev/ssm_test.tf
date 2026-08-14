@@ -1,16 +1,31 @@
 # =============================================================================
-#  Instancia mínima para probar HU-03 (aislamiento de datos) y HU-05
-#  (acceso sin SSH). No es parte del producto: es la evidencia.
+#  Demostración de acceso sin SSH (opcional, apagada por defecto).
+#
+#  Levanta una instancia en la subred de DATOS —la más aislada de las seis,
+#  sin ruta a internet— y comprueba que Session Manager conecta igual. Si
+#  funciona ahí, funciona en cualquier capa.
+#
+#  Se activa con enable_ssm_test = true. Está apagada porque es evidencia,
+#  no infraestructura, y una instancia encendida cuesta dinero.
+#
+#      terraform apply -var enable_ssm_test=true
+#      aws ssm start-session --target $(terraform output -raw instance_id)
+#
+#  Que esa sesión abra sin par de claves, sin puerto 22 y sin bastión es
+#  toda la demostración.
 # =============================================================================
 
-# --- El role que le da permiso al agente SSM para hablar con el servicio ---
-# Sin esto, aunque los VPC Endpoints estén perfectos, el agente no tiene
-# AUTORIZACIÓN para usarlos. Los endpoints abren el camino de RED; el role
-# abre el camino de PERMISOS. Son cosas distintas y se necesitan las dos.
+locals {
+  ssm_test_count = var.enable_ssm_test ? 1 : 0
+}
+
+# Los endpoints abren el camino de RED hacia la API de SSM; este rol abre el
+# de PERMISOS. Hacen falta los dos, y el error cuando falta uno no dice cuál.
 resource "aws_iam_role" "ssm_test" {
+  count = local.ssm_test_count
+
   name_prefix = "dev-ssm-test-"
 
-  # "Quién puede asumir este role": el propio servicio EC2.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -21,24 +36,26 @@ resource "aws_iam_role" "ssm_test" {
   })
 }
 
-# Policy administrada por AWS con los permisos exactos que el agente
-# SSM necesita. No la escribimos a mano: AWS la mantiene actualizada.
+# Política gestionada por AWS con los permisos exactos del agente. Escribirla
+# a mano significa mantenerla cada vez que SSM añade una acción.
 resource "aws_iam_role_policy_attachment" "ssm_managed" {
-  role       = aws_iam_role.ssm_test.name
+  count = local.ssm_test_count
+
+  role       = aws_iam_role.ssm_test[0].name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# El "instance profile" es el envoltorio que conecta un IAM role con una
-# instancia EC2. Un role no se le asigna a una instancia directamente;
-# necesita este intermediario.
+# Un rol no se asigna a una instancia directamente: el instance profile es
+# el intermediario obligatorio entre ambos.
 resource "aws_iam_instance_profile" "ssm_test" {
+  count = local.ssm_test_count
+
   name_prefix = "dev-ssm-test-"
-  role        = aws_iam_role.ssm_test.name
+  role        = aws_iam_role.ssm_test[0].name
 }
 
-# --- La AMI más reciente de Amazon Linux, sin hardcodear un ID ---
-# Los IDs de AMI cambian por región y con el tiempo. Este data source
-# siempre trae la última versión válida para tu región.
+# Los IDs de AMI cambian por región y con cada revisión. Consultarla evita
+# un valor que caduca y que además ata el código a una sola región.
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -49,40 +66,46 @@ data "aws_ami" "al2023" {
   }
 }
 
-# --- La instancia, en la subred de DATOS (la más restrictiva) ---
 resource "aws_instance" "ssm_test" {
+  count = local.ssm_test_count
+
   ami           = data.aws_ami.al2023.id
   instance_type = "t3.micro"
 
-  # La subred más aislada de las 6. Si SSM conecta aquí, conecta en
-  # cualquier lado. Es la prueba más exigente posible.
+  # La subred de datos: sin ruta 0.0.0.0/0. La conexión solo puede llegar
+  # por los interface endpoints, que es justo lo que se quiere demostrar.
   subnet_id = module.network.data_subnet_ids[0]
 
-  # OJO: no lleva ningún security group de aplicación (app/db). Le creamos
-  # uno mínimo, solo para permitir la salida hacia los VPC Endpoints.
-  vpc_security_group_ids = [aws_security_group.ssm_test.id]
+  vpc_security_group_ids = [aws_security_group.ssm_test[0].id]
+  iam_instance_profile   = aws_iam_instance_profile.ssm_test[0].name
 
-  iam_instance_profile = aws_iam_instance_profile.ssm_test.name
-
-  # Sin esto NO hay forma de entrar. Es la prueba, en una sola línea, de
-  # que HU-05 se cumple: cero llave, cero par de claves generado.
+  # Explícito, aunque sea el valor por defecto: sin par de claves. Es la
+  # prueba en una línea de que no hay una vía de acceso alternativa.
   key_name = null
 
-  tags = { Name = "dev-ssm-test", Environment = "dev" }
+  tags = { Name = "dev-ssm-test" }
 }
 
-# SG mínimo: solo egress hacia dentro de la VPC (donde viven los endpoints).
-# Nada de ingress — nadie necesita iniciar conexión HACIA esta instancia.
+# Solo salida HTTPS hacia la propia VPC, que es donde viven los endpoints.
+# Ninguna regla de entrada: nadie inicia una conexión hacia esta instancia,
+# ni siquiera para administrarla. Es el agente quien llama hacia fuera.
 resource "aws_security_group" "ssm_test" {
+  count = local.ssm_test_count
+
   name_prefix = "dev-ssm-test-"
   vpc_id      = module.network.vpc_id
-
-  egress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [module.network.vpc_cidr]
-  }
+  description = "Salida HTTPS hacia los endpoints de SSM"
 
   tags = { Name = "dev-ssm-test" }
+}
+
+resource "aws_vpc_security_group_egress_rule" "ssm_test_https" {
+  count = local.ssm_test_count
+
+  security_group_id = aws_security_group.ssm_test[0].id
+  cidr_ipv4         = module.network.vpc_cidr
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Hacia los interface endpoints de SSM"
 }

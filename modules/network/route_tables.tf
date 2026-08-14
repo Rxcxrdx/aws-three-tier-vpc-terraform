@@ -1,9 +1,14 @@
 # =============================================================================
-#  Tablas de ruta: le dicen a cada subred hacia dónde enviar tráfico
-#  que no es local.
+#  Tablas de rutas. Aquí es donde las tres capas dejan de ser una etiqueta
+#  y pasan a comportarse distinto:
+#
+#    public  → ruta 0.0.0.0/0 hacia el Internet Gateway
+#    private → ruta 0.0.0.0/0 hacia un NAT (solo salida), o ninguna
+#    data    → sin ruta 0.0.0.0/0 en absoluto
 # =============================================================================
 
-# --- Pública: 1 sola tabla, todas las públicas la comparten ---
+# Una sola tabla para todas las públicas: comparten destino, no hay razón
+# para duplicarla por zona.
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
   tags   = merge(var.tags, { Name = "${var.name}-public" })
@@ -15,7 +20,6 @@ resource "aws_route" "public_internet" {
   gateway_id             = aws_internet_gateway.this.id
 }
 
-# Asocia la tabla pública a las 2 (o N) subredes públicas
 resource "aws_route_table_association" "public" {
   for_each = { for k, v in aws_subnet.this : k => v if v.tags.Tier == "public" }
 
@@ -24,11 +28,13 @@ resource "aws_route_table_association" "public" {
 }
 
 
-# --- Datos: 1 sola tabla, SIN rutas hacia afuera. Esto es HU-03. ---
+# --- Datos: aislamiento por ausencia ---
+# No hay ningún aws_route apuntando a esta tabla, y esa ausencia es la
+# garantía. No existe una regla que diga "prohibido internet": simplemente
+# no hay camino. Un test verifica que siga sin haberlo.
 resource "aws_route_table" "data" {
   vpc_id = aws_vpc.this.id
   tags   = merge(var.tags, { Name = "${var.name}-data" })
-  # No hay aws_route aquí. A propósito: ninguna ruta = sin salida a internet.
 }
 
 resource "aws_route_table_association" "data" {
@@ -39,8 +45,11 @@ resource "aws_route_table_association" "data" {
 }
 
 
-# --- Privada: 1 tabla POR ZONA. Sin NAT todavía (llega en fase 2), ---
-# --- así que por ahora tampoco tiene ruta de salida. Igual que datos. ---
+# --- Privadas: una tabla POR ZONA ---
+# Aunque con nat_strategy = "single" las tres apunten al mismo NAT, se crean
+# separadas desde el principio: pasar a un NAT por zona es entonces cambiar
+# una variable, no reestructurar el módulo. La ruta de salida se añade en
+# nat.tf, que es quien sabe qué NAT le toca a cada zona.
 resource "aws_route_table" "private" {
   for_each = toset(local.azs)
 

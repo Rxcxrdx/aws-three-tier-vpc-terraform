@@ -1,0 +1,14 @@
+# Copia este archivo a backend.hcl y rellena el nombre de tu bucket.
+#
+#   cp backend.hcl.example backend.hcl
+#   terraform init -backend-config=backend.hcl
+#
+# El bucket lo crea el stack de bootstrap/ y su nombre sigue el patrón
+# tfstate-aws-three-tier-vpc-<TU_ACCOUNT_ID>. Para obtenerlo:
+#
+#   terraform -chdir=../../bootstrap output -raw bucket_name
+#
+# backend.hcl está ignorado por git: contiene datos de tu cuenta.
+
+bucket = "tfstate-aws-three-tier-vpc-000000000000"
+region = "us-east-1"

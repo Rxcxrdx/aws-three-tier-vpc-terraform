@@ -1,155 +1,79 @@
 # =============================================================================
-#  modules/network/main.tf
-#  VPC con tres capas de aislamiento replicadas en N zonas de disponibilidad.
+#  VPC de tres capas replicada en N zonas de disponibilidad.
+#
+#  Las capas (public / private / data) no son solo etiquetas: cada una tiene
+#  una tabla de rutas distinta, y esa diferencia es lo que hace que la capa
+#  de datos sea inalcanzable desde internet. Ver route_tables.tf.
 # =============================================================================
 
-
-# -----------------------------------------------------------------------------
-#  Consulta las zonas disponibles de la región actual
-# -----------------------------------------------------------------------------
-# Un "data" consulta, no crea. Le pregunta a AWS qué AZs existen en us-east-1.
-#
-# ¿Por qué no escribir "us-east-1a" y "us-east-1b" a mano?
-# Porque los nombres de AZ están ALEATORIZADOS POR CUENTA. Tu "us-east-1a"
-# puede ser físicamente otro datacenter que el "us-east-1a" de un colega.
-# AWS lo hizo así para que la gente no concentrara todo en la "a".
-#
-# Devuelve algo como: ["us-east-1a", "us-east-1b", "us-east-1c", ...]
+# Las zonas se consultan, no se escriben a mano, porque AWS aleatoriza los
+# nombres por cuenta: tu "us-east-1a" puede ser un datacenter físico distinto
+# al "us-east-1a" de otra cuenta. Fijarlos en el código hace que el reparto
+# entre zonas sea impredecible al desplegar en otra cuenta.
 data "aws_availability_zones" "available" {
-  # Filtro: solo zonas operativas.
-  # Una AZ también puede estar en "impaired" o "unavailable" (mantenimiento,
-  # incidente). Sin este filtro, podrías recibir una zona caída y el apply
-  # fallaría a los 10 minutos por algo que no tiene que ver con tu código.
+  # Sin este filtro AWS puede devolver una zona en mantenimiento o caída, y
+  # el apply falla diez minutos después por algo ajeno a tu configuración.
   state = "available"
 }
 
 
 locals {
-  # ---------------------------------------------------------------------------
-  #  Recorta la lista de AZs a las que realmente vamos a usar
-  # ---------------------------------------------------------------------------
-  # slice(lista, desde, hasta) → igual que en JavaScript: "desde" incluido,
-  # "hasta" excluido. Con az_count = 2 devuelve los índices 0 y 1.
-  #
-  # El valor de esto: dev usa 2 zonas y prod puede usar 3 cambiando UNA
-  # variable. El código no se toca. Eso convierte un script en un módulo.
   azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
 
-
-  # ---------------------------------------------------------------------------
-  #  El mapa de subredes: el corazón del módulo
-  # ---------------------------------------------------------------------------
-  # Objetivo: producir UN mapa plano de 6 entradas con esta forma:
+  # Mapa plano de subredes, una entrada por combinación de capa y zona:
   #
   #   "public-us-east-1a"  = { cidr = "10.0.0.0/24",  az = "...", tier = "public" }
   #   "private-us-east-1a" = { cidr = "10.0.16.0/24", az = "...", tier = "private" }
-  #   ...
   #
-  # Son dos ciclos anidados: 3 capas x 2 zonas = 6 subredes.
-  # Se lee de adentro hacia afuera.
+  # La clave del mapa es la identidad del recurso en el state, así que
+  # renombrarla más adelante destruye y recrea la subred. Por eso combina
+  # capa y zona: son los dos únicos datos que no cambian en su vida.
   subnets = merge([
-
-    # CICLO EXTERNO: recorre var.tier_offsets = { public = 0, private = 16, data = 32 }
-    # Al iterar un mapa recibes dos variables: la llave y el valor.
-    #   vuelta 1 → tier = "public",  offset = 0
-    #   vuelta 2 → tier = "private", offset = 16
-    #   vuelta 3 → tier = "data",    offset = 32
-    #
-    # Empieza con "[", así que este ciclo produce una LISTA de 3 mapas.
     for tier, offset in var.tier_offsets : {
-
-      # CICLO INTERNO: recorre las AZs recortadas arriba.
-      # Al iterar una lista también recibes dos variables: posición y valor.
-      #   vuelta 1 → idx = 0, az = "us-east-1a"
-      #   vuelta 2 → idx = 1, az = "us-east-1b"
-      #
-      # Empieza con "{" y usa "=>", así que produce un MAPA.
-      # (Con "[" y sin "=>" produciría una lista. Esa es la diferencia visual.)
       for idx, az in local.azs :
 
-      # La LLAVE del mapa. ${...} es interpolación, igual a las template
-      # strings de JavaScript. Resultado: "public-us-east-1a".
-      #
-      # Esta llave es la IDENTIDAD del recurso en el state. Elegirla bien
-      # importa: renombrarla después hace que Terraform destruya y recree.
       "${tier}-${az}" => {
-
-        # HUECO 1 — el CIDR de esta subred.
-        # cidrsubnet(prefijo, bits_a_agregar, numero_de_bloque)
-        #   - prefijo: el de la VPC
-        #   - bits: 8, porque 16 + 8 = 24, y queremos /24
-        #   - bloque: sale de sumar DOS valores que ya tienes en este ciclo
-        #
-        # Compruébalo mentalmente con la capa privada: offset 16, primera
-        # zona → bloque 16 → "10.0.16.0/24". Segunda zona → 17.
+        # El offset separa las capas y el índice separa las zonas dentro de
+        # la capa: private (offset 16) en la primera zona da el bloque 16,
+        # o sea 10.0.16.0/24; en la segunda zona, 10.0.17.0/24.
         cidr = cidrsubnet(var.vpc_cidr, 8, offset + idx)
 
-        # Guardamos la AZ y la capa en el objeto A PROPÓSITO.
-        # Dentro del recurso solo vas a tener each.key y each.value; las
-        # variables idx, az y tier ya no existirán ahí. Lo que no guardes
-        # en este objeto, se pierde. Este objeto es tu diseño.
+        # Dentro del recurso solo existen each.key y each.value. Lo que no se
+        # guarde en este objeto se pierde: este mapa es el contrato interno.
         az   = az
         tier = tier
       }
     }
 
-    # merge() aplana la lista de 3 mapas en 1 solo, porque for_each necesita
-    # un mapa plano.
-    #
-    # Pero merge() espera los mapas como argumentos SEPARADOS:
-    #   merge(m1, m2, m3)     ✅
-    #   merge([m1, m2, m3])   ❌ recibe un solo argumento que es una lista
-    #
-    # El "..." expande la lista en argumentos separados. Es el spread de
-    # JavaScript (Math.max(...nums)), solo que en HCL va DETRÁS.
-    #
-    # ⚠️ Va pegado al corchete: "]...)" funciona, "] ...)" falla con un
-    # error de sintaxis que no explica nada. Es el tropiezo más común aquí.
+    # merge() espera mapas como argumentos separados, no una lista. El "..."
+    # expande la lista; va pegado al corchete o falla con un error de
+    # sintaxis que no explica la causa.
   ]...)
 }
 
 
-# -----------------------------------------------------------------------------
-#  La VPC
-# -----------------------------------------------------------------------------
 resource "aws_vpc" "this" {
   cidr_block = var.vpc_cidr
 
-  # ⚠️ Estos dos NO son opcionales en este proyecto.
-  # enable_dns_support   → el resolver de DNS de AWS funciona dentro de la VPC
-  # enable_dns_hostnames → las instancias reciben nombre DNS
-  #
-  # Sin ellos, los VPC Endpoints de la fase 2 no resuelven nombres y el
-  # Session Manager de la fase 4 nunca conecta. Es una dependencia oculta:
-  # el error aparece tres fases después y no menciona el DNS.
+  # No son opcionales en esta arquitectura. Sin resolución DNS, los interface
+  # endpoints de SSM no resuelven sus nombres privados y Session Manager
+  # nunca conecta. El síntoma aparece mucho después y no menciona el DNS,
+  # así que hay un test que lo vigila.
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  # merge(externos, propios) → el ÚLTIMO gana en caso de conflicto.
-  # Así, si quien consume el módulo manda un "Name", el nuestro lo
-  # sobrescribe. Al revés, podrían romper los nombres de los recursos.
+  # El orden importa: los tags propios van al final para que quien consuma el
+  # módulo no pueda sobrescribir los nombres de los que dependen los filtros.
   tags = merge(var.tags, {
     Name = var.name
   })
 }
 
 
-# -----------------------------------------------------------------------------
-#  Internet Gateway
-# -----------------------------------------------------------------------------
-# La puerta a internet de la VPC. Dos datos que valen para entrevista:
-# no cuesta nada y no tiene límite de ancho de banda (el que cuesta y
-# estrangula es el NAT Gateway).
-#
-# Crearlo por sí solo no hace nada: sin una ruta apuntándole es una puerta
-# tapiada. Las rutas vienen en el tramo B.
+# El Internet Gateway no cuesta nada y no limita el ancho de banda; el que
+# cobra por hora y por GB es el NAT Gateway (ver nat.tf). Por sí solo no
+# hace nada: sin una ruta que lo apunte es una puerta tapiada.
 resource "aws_internet_gateway" "this" {
-  # HUECO 2 — el ID de la VPC.
-  # Referencia el recurso, no repitas el valor. Formato:
-  #   tipo_de_recurso.nombre_local.atributo
-  #
-  # Referenciar es lo que le dice a Terraform "esto depende de aquello" y
-  # le permite armar el grafo de dependencias. Igual que en el bootstrap.
   vpc_id = aws_vpc.this.id
 
   tags = merge(var.tags, {
@@ -159,48 +83,29 @@ resource "aws_internet_gateway" "this" {
 
 
 # -----------------------------------------------------------------------------
-#  Las 6 subredes
+#  Las subredes: un bloque, N recursos
 # -----------------------------------------------------------------------------
-# UN bloque resource, SEIS recursos reales en AWS.
+# for_each y no count porque con count la identidad en el state es la
+# posición: borrar la subred del medio corre todas las demás un puesto y
+# Terraform destruye y recrea recursos que nadie pidió tocar. Con claves de
+# texto, borrar una afecta solo a esa.
 resource "aws_subnet" "this" {
-  # for_each recorre el mapa y crea un recurso por entrada.
-  #
-  # ¿Por qué for_each y no count?
-  # Con count las direcciones serían [0], [1], [2]... y la POSICIÓN sería la
-  # identidad. Si borras la del medio, todo lo de después se corre un puesto
-  # y Terraform destruye y recrea subredes que no querías tocar.
-  # Con llaves de texto, borras una y solo se va esa.
-  #`
-  # Regla general: count solo para "¿existe o no?" (0 o 1). for_each para
-  # conjuntos de cosas parecidas pero distinguibles.
   for_each = local.subnets
 
-  # Dentro de un for_each tienes dos variables:
-  #   each.key   → la llave: "public-us-east-1a"
-  #   each.value → el objeto: { cidr = "...", az = "...", tier = "..." }
-  # Los campos del objeto se sacan con punto.
-
-  # HUECO 3 — el ID de la VPC. Lo mismo del hueco 2.
-  vpc_id = aws_vpc.this.id
-
-  # HUECO 4 — el CIDR de ESTA subred. Sale de each.value.
-  cidr_block = each.value.cidr
-
-  # HUECO 5 — la zona de ESTA subred. Sale de each.value.
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = each.value.cidr
   availability_zone = each.value.az
 
-  # HUECO 6 — ¿las instancias que arranquen aquí reciben IP pública?
-  # Solo tiene sentido en la capa pública. Necesitas un condicional.
-  # El ternario en HCL es igual a JavaScript: condicion ? si : no
-  # Y la condición sale de comparar el tier con un string.
-  map_public_ip_on_launch = each.value.tier == "public" ? true : false
+  # Solo la capa pública recibe IP pública automática. Es la mitad de lo que
+  # hace "pública" a una subred; la otra mitad es su tabla de rutas.
+  map_public_ip_on_launch = each.value.tier == "public"
 
   tags = merge(var.tags, {
-    # each.key ya trae capa y zona: "dev-public-us-east-1a"
     Name = "${var.name}-${each.key}"
 
-    # Este tag no es decoración: en la fase 3 vas a filtrar por él, y en la
-    # consola de AWS te salva de adivinar cuál subred es cuál.
+    # Este tag es un dato del que dependen las asociaciones de rutas y los
+    # outputs, no una etiqueta decorativa. Filtrar por él en vez de parsear
+    # el nombre de la clave evita depender de una convención de texto.
     Tier = each.value.tier
   })
 }

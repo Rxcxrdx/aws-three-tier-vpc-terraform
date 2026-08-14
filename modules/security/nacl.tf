@@ -1,14 +1,15 @@
-# modules/security/nacl.tf
-
-variable "data_subnet_ids" {
-  description = "IDs de las subredes de datos donde aplicar el NACL."
-  type        = list(string)
-}
-
-variable "vpc_cidr" {
-  description = "CIDR de la VPC, para permitir solo trafico interno."
-  type        = string
-}
+# =============================================================================
+#  NACL de la capa de datos: la segunda barrera.
+#
+#  Un security group es de estado: si permites la entrada, la respuesta sale
+#  sola. Un NACL no guarda estado y se evalúa a nivel de subred, antes de
+#  llegar a la instancia. Por eso hay que declarar entrada y salida por
+#  separado.
+#
+#  Duplicar la restricción no es redundancia inútil: un security group mal
+#  configurado por alguien con permisos sobre una instancia no atraviesa el
+#  NACL, que se administra a nivel de red.
+# =============================================================================
 
 resource "aws_network_acl" "data" {
   vpc_id     = var.vpc_id
@@ -17,7 +18,6 @@ resource "aws_network_acl" "data" {
   tags = merge(var.tags, { Name = "${var.name}-data-nacl" })
 }
 
-# Entrada: solo desde dentro de la VPC
 resource "aws_network_acl_rule" "data_ingress_vpc" {
   network_acl_id = aws_network_acl.data.id
   rule_number    = 100
@@ -27,7 +27,9 @@ resource "aws_network_acl_rule" "data_ingress_vpc" {
   cidr_block     = var.vpc_cidr
 }
 
-# Salida: solo hacia dentro de la VPC. Nada hacia 0.0.0.0/0.
+# Sin estado quiere decir que esta regla también hace falta para que salgan
+# las respuestas a las conexiones que permitió la anterior. Acotada al CIDR
+# de la VPC: la capa de datos responde a quien está dentro y a nadie más.
 resource "aws_network_acl_rule" "data_egress_vpc" {
   network_acl_id = aws_network_acl.data.id
   rule_number    = 100
@@ -37,5 +39,5 @@ resource "aws_network_acl_rule" "data_egress_vpc" {
   cidr_block     = var.vpc_cidr
 }
 
-# Todo lo demás queda denegado implícitamente: las NACL tienen un
-# "deny all" al final que no se puede quitar. No hace falta escribirlo.
+# Todo lo demás queda denegado por la regla implícita que cierra cada NACL y
+# que no se puede eliminar. No hace falta escribirla.

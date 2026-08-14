@@ -1,0 +1,13 @@
+# Copia este archivo a backend.hcl y rellena el nombre de tu bucket.
+#
+#   cp backend.hcl.example backend.hcl
+#   terraform init -backend-config=backend.hcl -migrate-state
+#
+# El nombre lo imprime el propio apply:
+#
+#   terraform output -raw tfstate_bucket_name
+#
+# backend.hcl está ignorado por git: contiene datos de tu cuenta.
+
+bucket = "tfstate-aws-three-tier-vpc-000000000000"
+region = "us-east-1"

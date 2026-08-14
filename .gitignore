@@ -6,6 +6,10 @@
 # Caché de providers y módulos
 .terraform/
 
+# Configuración de backend con datos de la cuenta.
+# El .example sí se versiona: es la plantilla.
+backend.hcl
+
 # Variables con valores locales
 *.tfvars
 !example.tfvars
