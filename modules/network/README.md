@@ -18,7 +18,7 @@ module "network" {
 }
 ```
 
-Para un despliegue sin coste, por ejemplo en pruebas o demostraciones:
+Para pruebas o demostraciones, sin infraestructura persistente:
 
 ```hcl
 module "network" {
@@ -39,7 +39,7 @@ module "network" {
 | `az_count` | `number` | `2` | Zonas a usar. Entre 2 y 4; menos de 2 rompe la alta disponibilidad. |
 | `tier_offsets` | `map(number)` | `{public=0, private=16, data=32}` | Bloque /24 inicial de cada capa. Múltiplos de 16. |
 | `nat_strategy` | `string` | `single` | `none`, `single` o `per_az`. Ver abajo. |
-| `enable_ssm_endpoints` | `bool` | `true` | Interface endpoints de SSM. Cobran por hora y zona. |
+| `enable_ssm_endpoints` | `bool` | `true` | Interface endpoints de SSM para administración sin SSH. |
 | `enable_flow_logs` | `bool` | `true` | Registro de conexiones en CloudWatch. |
 | `flow_logs_retention_days` | `number` | `7` | Retención de los flow logs. |
 | `tags` | `map(string)` | `{}` | Tags adicionales para todos los recursos. |
@@ -60,11 +60,11 @@ module "network" {
 
 ## `nat_strategy`
 
-| Valor | NAT creados | Coste | Qué pasa si cae una zona |
-|---|---|---|---|
-| `none` | 0 | Cero | Las subredes privadas no tienen salida en ningún caso. |
-| `single` | 1 | ~1,08 USD/día | Si cae la zona del NAT, **todas** las subredes privadas pierden la salida. |
-| `per_az` | 1 por zona | ~1,08 USD/día × zonas | Las demás zonas siguen saliendo con normalidad. |
+| Valor | NAT creados | Qué pasa si cae una zona |
+|---|---|---|
+| `none` | 0 | Las subredes privadas no tienen salida en ningún caso. |
+| `single` | 1 | Si cae la zona del NAT, **todas** las subredes privadas pierden la salida. |
+| `per_az` | 1 por zona | Las demás zonas siguen saliendo con normalidad. |
 
 Las tablas de rutas privadas se crean por zona en los tres casos, así que cambiar de `single` a `per_az` es cambiar una variable.
 

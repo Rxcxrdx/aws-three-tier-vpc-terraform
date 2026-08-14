@@ -1,6 +1,6 @@
 # Ejemplo mínimo
 
-La arquitectura completa, sin preparativos y sin coste.
+La arquitectura completa, sin preparativos previos.
 
 ```bash
 terraform init
@@ -19,14 +19,14 @@ Aquí el state se queda en un archivo local. Ni bucket, ni bootstrap, ni configu
 
 Una VPC `10.20.0.0/16` con seis subredes en dos zonas, sus tablas de rutas, los tres security groups encadenados, el NACL de la capa de datos y los flow logs.
 
-**No crea nada facturable.** Los dos recursos que cobran por hora vienen apagados:
+Los dos recursos que requieren infraestructura persistente vienen desactivados:
 
 ```hcl
 nat_strategy         = "none"   # sin NAT Gateway
 enable_ssm_endpoints = false    # sin interface endpoints
 ```
 
-La consecuencia es que las subredes privadas no tienen salida a internet. Para verlo tal como se despliega de verdad, cambia esos dos valores a `"single"` y `true` — y consulta antes la tabla de costes del [README principal](../../README.md#costes).
+La consecuencia es que las subredes privadas no tienen salida a internet. Para desplegarlo tal como funciona en un entorno real, cambia esos dos valores a `"single"` y `true`. Consulta [Salida a internet sin exposición](../../README.md#salida-a-internet-sin-exposición) para entender qué implica cada opción.
 
 ## Limpieza
 
