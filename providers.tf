@@ -1,6 +1,6 @@
+# providers.tf — en la raíz
 terraform {
   required_version = ">= 1.11"
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -11,12 +11,4 @@ terraform {
 
 provider "aws" {
   region = "us-east-1"
-
-  default_tags {
-    tags = {
-      Project   = "aws-three-tier-vpc-terraform"
-      ManagedBy = "terraform"
-      Owner     = "ricardo" 
-    }
-  }
 }
