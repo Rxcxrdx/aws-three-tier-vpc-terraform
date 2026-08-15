@@ -1,19 +1,7 @@
-# =============================================================================
-#  Pruebas del módulo de seguridad.
-#
-#  Estas van con apply y no con plan, y la razón es interesante: lo que hay
-#  que demostrar es que una regla apunta al ID de otro security group, y ese
-#  ID no existe hasta que AWS lo crea. En plan aparece como "known after
-#  apply" y la aserción no se puede evaluar. Lo mismo con el security group
-#  por defecto, que se adopta de una VPC real: sin VPC no hay nada que
-#  adoptar.
-#
-#  Security groups, NACLs, VPC y subredes no cuestan nada, así que la suite
-#  sigue sin generar factura. Todo se destruye en el teardown.
-# =============================================================================
+# Pruebas del módulo de seguridad. Van con apply porque los identificadores de
+# security group no existen hasta entonces, y el default SG se adopta de una
+# VPC real. Nada de lo que crean es infraestructura persistente.
 
-
-# Andamio: una VPC de usar y tirar. Ver tests/setup/main.tf.
 run "setup_vpc" {
   command = apply
 
@@ -37,16 +25,11 @@ run "las_capas_se_referencian_entre_si_nunca_por_ip" {
     data_subnet_ids = run.setup_vpc.data_subnet_ids
   }
 
-  # Se compara contra el security group real del balanceador, no solo que no
-  # sea nulo: así también falla si alguien reapunta la regla a otro grupo.
   assert {
     condition     = aws_vpc_security_group_ingress_rule.app_from_alb.referenced_security_group_id == aws_security_group.alb.id
     error_message = "El SG de app debe referenciar el SG del ALB."
   }
 
-  # Sustituir la referencia por un CIDR de subred es el atajo habitual
-  # cuando algo no conecta: funciona, no da error, y abre la capa a
-  # cualquier cosa que aterrice en esa subred.
   assert {
     condition     = aws_vpc_security_group_ingress_rule.app_from_alb.cidr_ipv4 == null
     error_message = "La regla app-desde-alb no debe tener un CIDR fijo."
@@ -62,8 +45,7 @@ run "las_capas_se_referencian_entre_si_nunca_por_ip" {
     error_message = "La regla db-desde-app no debe tener un CIDR fijo."
   }
 
-  # El único 0.0.0.0/0 legítimo vive en el balanceador. Se afirma para dejar
-  # constancia de dónde está permitido y de que no se ha movido.
+  # El único 0.0.0.0/0 de entrada legítimo está en el balanceador.
   assert {
     condition     = aws_vpc_security_group_ingress_rule.alb_https.cidr_ipv4 == "0.0.0.0/0"
     error_message = "El SG del ALB debe aceptar HTTPS desde internet."

@@ -1,17 +1,7 @@
-# =============================================================================
-#  Interface endpoints de SSM.
-#
-#  Permiten administrar instancias con Session Manager sin bastión, sin
-#  puerto 22 abierto y sin par de claves. El tráfico hacia la API de SSM no
-#  sale de la VPC, así que funciona incluso en subredes sin ruta a internet.
-#
-#  Cuestan por hora y por zona, por eso son desactivables.
-# =============================================================================
+# Interface endpoints de SSM: administración sin bastión ni puerto 22.
 
-# La región se consulta en vez de escribirla: con la región fija en el
-# nombre del servicio, desplegar en otra región crea endpoints que apuntan
-# a un servicio de otra geografía y el apply falla con un error que no
-# menciona la región.
+# La región se consulta; escrita en el nombre del servicio, desplegar en otra
+# región falla con un error que no la menciona.
 data "aws_region" "current" {}
 
 locals {
@@ -28,8 +18,6 @@ resource "aws_security_group" "vpc_endpoints" {
   tags = merge(var.tags, { Name = "${var.name}-vpce" })
 }
 
-# Solo HTTPS y solo desde dentro de la VPC: el endpoint es la puerta de
-# entrada a la API de AWS desde la red privada, no un servicio público.
 resource "aws_vpc_security_group_ingress_rule" "vpc_endpoints_https" {
   count = var.enable_ssm_endpoints ? 1 : 0
 
@@ -49,9 +37,7 @@ resource "aws_vpc_endpoint" "ssm" {
   subnet_ids         = [for k, v in aws_subnet.this : v.id if v.tags.Tier == "private"]
   security_group_ids = [aws_security_group.vpc_endpoints[0].id]
 
-  # Sin esto habría que llamar al endpoint por su nombre largo generado.
-  # Con DNS privado, las llamadas normales a la API de SSM se resuelven
-  # solas hacia el endpoint. Depende de enable_dns_hostnames en la VPC.
+  # Resuelve la API de SSM hacia el endpoint sin cambiar las llamadas.
   private_dns_enabled = true
 
   tags = merge(var.tags, { Name = "${var.name}-${each.value}" })

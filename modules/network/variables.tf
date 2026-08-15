@@ -1,9 +1,3 @@
-# =============================================================================
-#  Interfaz de entrada del módulo. Todo lo que se puede configurar desde
-#  fuera vive aquí y solo aquí: quien evalúe si este módulo le sirve lee
-#  este archivo y ninguno más.
-# =============================================================================
-
 variable "name" {
   description = "Prefijo para nombrar y etiquetar todos los recursos. Ej: dev, prod."
   type        = string
@@ -32,7 +26,7 @@ variable "az_count" {
 }
 
 variable "tier_offsets" {
-  description = "Bloque /24 inicial de cada capa dentro de la VPC. Separarlas de 16 en 16 deja espacio para crecer sin renumerar."
+  description = "Bloque /24 inicial de cada capa. Separarlas de 16 en 16 deja crecer hasta 16 zonas por capa sin renumerar."
   type        = map(number)
 
   default = {
@@ -47,16 +41,8 @@ variable "tier_offsets" {
   }
 }
 
-
-# -----------------------------------------------------------------------------
-#  Interruptores de coste
-# -----------------------------------------------------------------------------
-# Los tres recursos caros de esta arquitectura son el NAT Gateway y los
-# interface endpoints. Se pueden apagar por separado para que los ejemplos
-# y la suite de tests corran sin generar factura. Ver docs/decisions.md.
-
 variable "nat_strategy" {
-  description = "none = sin salida a internet desde las subredes privadas (gratis). single = 1 NAT compartido (dev). per_az = 1 NAT por zona (prod, tolera la caída de una zona)."
+  description = "none = sin salida desde las subredes privadas. single = 1 NAT compartido. per_az = 1 NAT por zona, tolera la caída de una zona."
   type        = string
   default     = "single"
 
@@ -67,7 +53,7 @@ variable "nat_strategy" {
 }
 
 variable "enable_ssm_endpoints" {
-  description = "Crea los interface endpoints de SSM para administrar instancias sin bastión ni SSH. Cuestan por hora y por zona."
+  description = "Crea los interface endpoints de SSM para administrar instancias sin bastión ni SSH."
   type        = bool
   default     = true
 }

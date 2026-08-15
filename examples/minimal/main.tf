@@ -1,18 +1,6 @@
-# =============================================================================
-#  Ejemplo mínimo: la arquitectura completa, sin coste y sin preparativos.
+# Ejemplo autocontenido: estado local, sin backend remoto ni bootstrap.
 #
-#  A diferencia de envs/dev, este directorio NO usa backend remoto. El state
-#  se queda en un archivo local, así que no hace falta ejecutar el bootstrap
-#  ni tener un bucket propio: basta con credenciales de AWS.
-#
-#      terraform init
-#      terraform apply
-#      terraform destroy
-#
-#  Los dos recursos que cobran por hora están apagados a propósito (ver
-#  abajo). Lo que queda —VPC, subredes, rutas, security groups, NACL y flow
-#  logs— no genera cargo alguno.
-# =============================================================================
+#   terraform init && terraform apply
 
 terraform {
   required_version = ">= 1.11"
@@ -50,16 +38,7 @@ module "network" {
   vpc_cidr = "10.20.0.0/16"
   az_count = 2
 
-  # Los dos interruptores que mantienen el ejemplo en cero:
-  #
-  #   nat_strategy = "none"    → sin NAT Gateway. Las subredes privadas se
-  #                              quedan sin salida a internet, que para ver
-  #                              la topología no hace falta.
-  #   enable_ssm_endpoints     → los interface endpoints cobran por hora y
-  #                              por zona.
-  #
-  # Para ver la arquitectura tal como se despliega de verdad, cámbialos a
-  # "single" y true, y lee antes la tabla de costes del README.
+  # Desactivados para que el ejemplo no deje infraestructura persistente.
   nat_strategy         = "none"
   enable_ssm_endpoints = false
 }
@@ -69,8 +48,6 @@ module "security" {
 
   name = "example"
 
-  # Las salidas de un módulo alimentan las entradas del otro: es Terraform
-  # quien deduce de aquí que la red debe existir antes que los firewalls.
   vpc_id          = module.network.vpc_id
   vpc_cidr        = module.network.vpc_cidr
   data_subnet_ids = module.network.data_subnet_ids

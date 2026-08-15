@@ -1,30 +1,16 @@
-# =============================================================================
-#  Backend parcial.
+# Backend parcial: el nombre del bucket lleva el account id y los nombres de
+# bucket son únicos en todo AWS, así que se aporta al inicializar.
 #
-#  El bloque va vacío a propósito: el nombre del bucket de state incluye un
-#  número de cuenta, y los nombres de bucket de S3 son únicos en todo AWS.
-#  Escribirlo aquí haría que este repositorio solo funcionara en la cuenta
-#  de quien lo escribió.
-#
-#  Los valores se pasan al inicializar:
-#
-#      cp backend.hcl.example backend.hcl   # y rellenar
-#      terraform init -backend-config=backend.hcl
-#
-#  backend.hcl está en .gitignore. El .example, no.
-#
-#  El "key" separa este stack del bootstrap dentro del mismo bucket. Dos
-#  stacks apuntando a la misma ruta comparten state, y el apply de uno
-#  puede destruir los recursos del otro.
-# =============================================================================
+#   cp backend.hcl.example backend.hcl
+#   terraform init -backend-config=backend.hcl
 
 terraform {
   backend "s3" {
+    # El key aísla este stack del resto dentro del mismo bucket.
     key     = "network/dev/terraform.tfstate"
     encrypt = true
 
-    # Locking nativo de S3, disponible desde Terraform 1.11. Antes hacía
-    # falta una tabla de DynamoDB solo para esto.
+    # Locking nativo de S3, desde Terraform 1.11. Antes requería DynamoDB.
     use_lockfile = true
   }
 }

@@ -1,14 +1,7 @@
-# =============================================================================
-#  tests/setup — andamio para las pruebas del módulo de seguridad.
+# Andamio para las pruebas del módulo de seguridad: una VPC y dos subredes.
 #
-#  El módulo de seguridad solo se puede verificar de verdad sobre recursos
-#  reales: "el SG de app referencia al SG del ALB" es un ID que no existe
-#  hasta el apply, y el SG default hay que adoptarlo de una VPC que exista.
-#
-#  Por eso NO se reutiliza ./modules/network aquí: ese módulo levanta NAT
-#  Gateways, EIPs y VPC Endpoints, que cuestan dinero y tardan minutos.
-#  Esto es lo mínimo indispensable: una VPC y dos subredes. Todo gratis.
-# =============================================================================
+# No reutiliza modules/network a propósito: ese módulo levanta NAT Gateways y
+# endpoints, que no hacen falta para probar security groups.
 
 variable "name" {
   description = "Prefijo para los recursos efímeros de prueba."
@@ -17,7 +10,7 @@ variable "name" {
 }
 
 variable "vpc_cidr" {
-  description = "CIDR de la VPC de prueba. Aislado del rango que usan los entornos."
+  description = "CIDR de la VPC de prueba. Aislado del rango de los entornos."
   type        = string
   default     = "10.99.0.0/16"
 }
@@ -32,7 +25,7 @@ resource "aws_vpc" "this" {
   tags = { Name = var.name }
 }
 
-# Dos subredes de datos: son las que consume el NACL del módulo de seguridad.
+# Son las que consume el NACL del módulo de seguridad.
 resource "aws_subnet" "data" {
   count = 2
 

@@ -1,14 +1,6 @@
-# =============================================================================
-#  Tablas de rutas. Aquí es donde las tres capas dejan de ser una etiqueta
-#  y pasan a comportarse distinto:
-#
-#    public  → ruta 0.0.0.0/0 hacia el Internet Gateway
-#    private → ruta 0.0.0.0/0 hacia un NAT (solo salida), o ninguna
-#    data    → sin ruta 0.0.0.0/0 en absoluto
-# =============================================================================
+# Las tablas de rutas son lo que hace que cada capa se comporte distinto.
 
-# Una sola tabla para todas las públicas: comparten destino, no hay razón
-# para duplicarla por zona.
+# Una sola tabla para todas las públicas: comparten destino.
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
   tags   = merge(var.tags, { Name = "${var.name}-public" })
@@ -27,11 +19,8 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-
-# --- Datos: aislamiento por ausencia ---
-# No hay ningún aws_route apuntando a esta tabla, y esa ausencia es la
-# garantía. No existe una regla que diga "prohibido internet": simplemente
-# no hay camino. Un test verifica que siga sin haberlo.
+# Sin ningún aws_route asociado: el aislamiento de la capa de datos es la
+# ausencia de ruta, no una regla de denegación.
 resource "aws_route_table" "data" {
   vpc_id = aws_vpc.this.id
   tags   = merge(var.tags, { Name = "${var.name}-data" })
@@ -44,12 +33,8 @@ resource "aws_route_table_association" "data" {
   route_table_id = aws_route_table.data.id
 }
 
-
-# --- Privadas: una tabla POR ZONA ---
-# Aunque con nat_strategy = "single" las tres apunten al mismo NAT, se crean
-# separadas desde el principio: pasar a un NAT por zona es entonces cambiar
-# una variable, no reestructurar el módulo. La ruta de salida se añade en
-# nat.tf, que es quien sabe qué NAT le toca a cada zona.
+# Una tabla por zona desde el principio: pasar a per_az es cambiar una
+# variable en vez de reestructurar. La ruta de salida se añade en nat.tf.
 resource "aws_route_table" "private" {
   for_each = toset(local.azs)
 

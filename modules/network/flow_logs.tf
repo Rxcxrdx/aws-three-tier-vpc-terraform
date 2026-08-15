@@ -1,10 +1,4 @@
-# =============================================================================
-#  VPC Flow Logs: registra cada conexión aceptada o rechazada de la VPC.
-#
-#  Es la única forma de demostrar después que el aislamiento funcionó. Sin
-#  esto, "la capa de datos no habla con internet" es una afirmación sobre
-#  la configuración; con esto, es una consulta con resultados.
-# =============================================================================
+# Registro de conexiones aceptadas y rechazadas de la VPC.
 
 resource "aws_cloudwatch_log_group" "flow_logs" {
   count = var.enable_flow_logs ? 1 : 0
@@ -15,9 +9,7 @@ resource "aws_cloudwatch_log_group" "flow_logs" {
   tags = merge(var.tags, { Name = "${var.name}-flow-logs" })
 }
 
-# El servicio de Flow Logs escribe en tu cuenta, así que necesita un rol que
-# asumir. El principal es el servicio, no una instancia: nadie inicia sesión
-# con este rol.
+# El principal es el servicio de Flow Logs, no una instancia.
 resource "aws_iam_role" "flow_logs" {
   count = var.enable_flow_logs ? 1 : 0
 
@@ -39,9 +31,7 @@ resource "aws_iam_role_policy" "flow_logs" {
   name_prefix = "${var.name}-flow-logs-"
   role        = aws_iam_role.flow_logs[0].id
 
-  # Acotado al log group de esta VPC. Los ejemplos que circulan usan
-  # Resource = "*", que da permiso de escritura sobre todos los logs de la
-  # cuenta a cambio de nada.
+  # Acotada a este log group; los ejemplos habituales usan Resource = "*".
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -65,13 +55,10 @@ resource "aws_flow_log" "this" {
   log_destination      = aws_cloudwatch_log_group.flow_logs[0].arn
   log_destination_type = "cloud-watch-logs"
 
-  # ACCEPT y REJECT. Registrar solo lo aceptado deja fuera justo la
-  # evidencia que interesa: los intentos que el aislamiento bloqueó.
+  # ACCEPT y REJECT: los intentos bloqueados son la evidencia que interesa.
   traffic_type = "ALL"
 
-  # El formato por defecto no incluye flow-direction ni traffic-path, que
-  # son los campos que distinguen una salida a internet de una respuesta a
-  # una conexión entrante.
+  # El formato por defecto no trae flow-direction ni traffic-path.
   log_format = "$${account-id} $${vpc-id} $${subnet-id} $${instance-id} $${srcaddr} $${dstaddr} $${srcport} $${dstport} $${protocol} $${action} $${flow-direction} $${traffic-path} $${start} $${end}"
 
   tags = merge(var.tags, { Name = "${var.name}-flow-log" })

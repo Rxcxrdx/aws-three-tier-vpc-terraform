@@ -1,9 +1,3 @@
-# =============================================================================
-#  Sin estos outputs el módulo sería inservible: quien lo consuma necesita
-#  los IDs para asignar cada security group al recurso que le corresponde
-#  (el ALB, las instancias de la aplicación, la base de datos).
-# =============================================================================
-
 output "alb_security_group_id" {
   description = "Security group del balanceador. Asignar al ALB."
   value       = aws_security_group.alb.id

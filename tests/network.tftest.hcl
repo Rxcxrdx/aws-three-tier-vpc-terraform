@@ -1,12 +1,5 @@
-# =============================================================================
-#  Pruebas del módulo de red.
-#
-#  Todas se ejecutan con nat_strategy = "none" y los endpoints apagados, de
-#  forma que la suite completa no crea ni un solo recurso facturable. Correr
-#  los tests no debería costar dinero ni hacer pensar en ello.
-#
-#      terraform test
-# =============================================================================
+# Pruebas del módulo de red. Se ejecutan sin NAT ni endpoints, de modo que la
+# suite no despliega infraestructura persistente.
 
 variables {
   name                 = "test"
@@ -24,8 +17,6 @@ run "crea_una_subred_por_capa_y_zona" {
     source = "./modules/network"
   }
 
-  # 3 capas x 2 zonas. Si alguien rompe el doble bucle que arma el mapa de
-  # subredes, el conteo lo delata antes de llegar a AWS.
   assert {
     condition     = length(aws_subnet.this) == 6
     error_message = "Se esperaban 6 subredes (3 capas x 2 zonas)."
@@ -40,8 +31,6 @@ run "los_cidr_respetan_el_offset_de_cada_capa" {
     source = "./modules/network"
   }
 
-  # No basta con que exista una subred con ese nombre: se comprueba que el
-  # cálculo offset + índice haya dado el bloque correcto.
   assert {
     condition     = aws_subnet.this["public-us-east-1a"].cidr_block == "10.0.0.0/24"
     error_message = "La primera subred pública debe ser 10.0.0.0/24."
@@ -77,9 +66,7 @@ run "las_subredes_de_datos_no_reciben_ip_publica" {
 
 
 run "la_capa_de_datos_no_tiene_ruta_a_internet" {
-  # Este necesita apply: las rutas de una tabla son un atributo calculado y
-  # en plan aparecen como desconocidas. Sin NAT ni endpoints, aplicar la red
-  # completa sigue sin costar nada.
+  # Necesita apply: las rutas de una tabla no se conocen durante el plan.
   command = apply
 
   module {
@@ -102,9 +89,6 @@ run "el_dns_esta_activo_porque_ssm_depende_de_el" {
     source = "./modules/network"
   }
 
-  # Prerrequisito silencioso: sin resolución DNS los interface endpoints no
-  # resuelven sus nombres privados y Session Manager no conecta. El fallo
-  # aparece mucho después y no menciona el DNS, así que se vigila aquí.
   assert {
     condition     = aws_vpc.this.enable_dns_support && aws_vpc.this.enable_dns_hostnames
     error_message = "El DNS debe estar activo en la VPC: es prerrequisito de los endpoints de SSM."
@@ -119,8 +103,6 @@ run "sin_nat_las_subredes_privadas_quedan_sin_salida" {
     source = "./modules/network"
   }
 
-  # Verifica el interruptor de coste: con nat_strategy = "none" no debe
-  # crearse ningún NAT Gateway ni ninguna IP elástica.
   assert {
     condition     = length(aws_nat_gateway.this) == 0
     error_message = "Con nat_strategy = none no debe crearse ningún NAT Gateway."
@@ -144,8 +126,6 @@ run "un_nat_por_zona_cuando_la_estrategia_es_per_az" {
     nat_strategy = "per_az"
   }
 
-  # Con per_az cada zona tiene el suyo: es lo que evita que la caída de una
-  # zona deje sin salida a las demás.
   assert {
     condition     = length(aws_nat_gateway.this) == 2
     error_message = "Con nat_strategy = per_az debe haber un NAT por zona."
