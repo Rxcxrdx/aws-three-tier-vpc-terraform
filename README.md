@@ -1,10 +1,10 @@
 # VPC de tres capas en AWS con Terraform
 
-Este proyecto monta una red segmentada en AWS para una aplicación web de tres capas. Un balanceador de carga abierto a internet, una capa de aplicación aislada y una capa de datos sin salida al exterior.
+Red segmentada en AWS para una aplicación web de tres capas. Un balanceador abierto a internet, una capa de aplicación aislada y una capa de datos sin salida al exterior.
 
-Todo está escrito como módulos de Terraform reutilizables. Se administra sin SSH ni bastión y se verifica con pruebas automatizadas.
+Está escrito como módulos de Terraform reutilizables. Se administra sin SSH ni bastión y se verifica con pruebas automatizadas.
 
-El repositorio sirve para desplegarse y también para leerse. Cada sección explica primero por qué se toma una decisión y después cómo se implementa.
+El repositorio sirve para desplegarse y para leerse. Cada sección dice primero por qué se toma una decisión y luego cómo se implementa.
 
 ## Contenido
 
@@ -16,14 +16,16 @@ El repositorio sirve para desplegarse y también para leerse. Cada sección expl
 - [Administración sin SSH con Session Manager](#administración-sin-ssh-con-session-manager)
 - [Las dos barreras de la capa de datos](#las-dos-barreras-de-la-capa-de-datos)
 - [El estado de Terraform en S3](#el-estado-de-terraform-en-s3)
+- [Herramientas](#herramientas)
 - [Antes de empezar](#antes-de-empezar)
 - [Paso 1. Probar el módulo](#paso-1-probar-el-módulo)
 - [Paso 2. Crear el bucket de estado](#paso-2-crear-el-bucket-de-estado)
 - [Paso 3. Desplegar el entorno](#paso-3-desplegar-el-entorno)
 - [Paso 4. Comprobar el acceso sin SSH](#paso-4-comprobar-el-acceso-sin-ssh)
 - [Limpieza](#limpieza)
-- [Ejecutar las pruebas](#ejecutar-las-pruebas)
+- [Pruebas](#pruebas)
 - [Decisiones de implementación](#decisiones-de-implementación)
+- [Bugs](#bugs)
 - [Solución de problemas](#solución-de-problemas)
 - [Referencia](#referencia)
 
@@ -66,21 +68,17 @@ flowchart TB
     style DAT fill:#42272a,stroke:#c1666b,color:#f8ebec
 ```
 
-Mira lo que falta en el diagrama. Ninguna flecha une la capa de datos con internet. Eso no se consigue con una regla que lo prohíba. Se consigue con una ausencia, porque la tabla de rutas de esas subredes no tiene ninguna entrada hacia `0.0.0.0/0`. El camino no existe.
+Mira lo que falta en el diagrama. Ninguna flecha une la capa de datos con internet. Eso no se consigue con una regla que lo prohíba, sino con una ausencia. La tabla de rutas de esas subredes no tiene ninguna entrada hacia `0.0.0.0/0`. El camino no existe.
 
 ---
 
 ## Arquitectura de tres capas
 
-### El punto de partida
-
 Lo más rápido para desplegar algo en AWS es una VPC plana. Todas las instancias en subredes públicas, cada una con su IP pública, y los security groups como único filtro. Funciona y se monta en minutos.
 
-El problema aparece cuando algo falla. En una red plana, cualquier instancia con IP pública forma parte de la superficie expuesta. Una sola regla mal escrita deja la base de datos accesible desde internet. Como todo comparte el mismo espacio de red, que la configuración sea correcta depende de que todas las reglas estén bien todo el tiempo.
+El problema aparece cuando algo falla. Cualquier instancia con IP pública forma parte de la superficie expuesta. Una sola regla mal escrita deja la base de datos accesible desde internet. Como todo comparte el mismo espacio de red, que la configuración sea correcta depende de que todas las reglas estén bien todo el tiempo.
 
-### Qué gana la red al segmentarla
-
-Al dividirla en capas cambia la pregunta de seguridad. Ya no es si cada regla está bien. Es hasta dónde llega alguien que comprometa una capa concreta. Y esa pregunta tiene una respuesta acotada.
+Al dividir la red en capas cambia la pregunta de seguridad. Ya no es si cada regla está bien. Es hasta dónde llega alguien que comprometa una capa concreta. Y esa pregunta tiene una respuesta acotada.
 
 ```mermaid
 flowchart LR
@@ -103,9 +101,7 @@ Cada capa acepta tráfico de un solo sitio y por un solo puerto. El balanceador 
 
 La capa de datos tiene algo que las otras no. Al no tener ruta de salida, tampoco sirve para sacar información. Quien llegue ahí tiene que volver por donde vino, y ese camino pasa por capas que registran su tráfico en los flow logs.
 
-### Requisitos de cumplimiento
-
-Hay un motivo más formal. PCI DSS, ISO 27001 y casi todos los marcos de auditoría piden que los datos estén en una red sin acceso directo a internet. Con esta topología, la evidencia es la tabla de rutas de la capa de datos, que no tiene ruta por defecto.
+Hay un motivo más formal. PCI DSS, ISO 27001 y casi todos los marcos de auditoría piden que los datos estén en una red sin acceso directo a internet. La evidencia es la tabla de rutas de la capa de datos, que no tiene ruta por defecto.
 
 ---
 
@@ -132,9 +128,9 @@ sequenceDiagram
     ALB-->>U: HTTPS 443
 ```
 
-Fíjate en los pasos 3 y 5. Las reglas no autorizan un rango de direcciones. Autorizan un security group. La regla de la capa de aplicación dice que acepta tráfico de lo que tenga puesto el security group `alb`.
+Fíjate en los pasos 3 y 5. Las reglas no autorizan un rango de direcciones, autorizan un security group. La de la capa de aplicación dice que acepta tráfico de lo que tenga puesto el security group `alb`.
 
-La diferencia se nota cuando alguien lanza una máquina nueva en la subred privada. Con un CIDR, esa máquina puede hablar con la base de datos solo por estar en la subred correcta. Con una referencia a security group no puede, salvo que alguien le asigne el grupo a propósito. El permiso deja de depender de dónde está la máquina y pasa a depender de qué es.
+La diferencia se nota cuando alguien lanza una máquina nueva en la subred privada. Con un CIDR, esa máquina habla con la base de datos solo por estar en la subred correcta. Con una referencia a security group no puede, salvo que alguien le asigne el grupo a propósito. El permiso deja de depender de dónde está la máquina y pasa a depender de qué es.
 
 Estas reglas aguantan además los cambios de direccionamiento. Si renumeras la red mañana, siguen siendo correctas sin tocarlas.
 
@@ -142,7 +138,7 @@ Estas reglas aguantan además los cambios de direccionamiento. Si renumeras la r
 
 ## Diseño del direccionamiento
 
-Esta parte condiciona el futuro de la VPC más que ninguna otra. El bloque CIDR de una VPC no se puede reducir ni cambiar una vez creada. Se pueden añadir bloques secundarios, pero el rango principal es para siempre. Conviene pensarlo antes de escribir la primera línea.
+El bloque CIDR de una VPC no se puede reducir ni cambiar una vez creada. Se pueden añadir bloques secundarios, pero el rango principal es para siempre. Conviene pensarlo antes de escribir la primera línea.
 
 ### Elegir el rango de la VPC
 
@@ -154,13 +150,13 @@ Las direcciones privadas disponibles son las del RFC 1918.
 | `172.16.0.0` | `/12` | 1.048.576 |
 | `192.168.0.0` | `/16` | 65.536 |
 
-Aquí se usa `10.0.0.0/16`, que da 65.536 direcciones. Pero el tamaño no es lo único que decide. Dos VPC con rangos solapados no se pueden emparejar. Si algún día necesitas VPC peering, un Transit Gateway o una VPN contra la red de una empresa, cualquier solapamiento te obliga a rehacer la red o a montar traducción de direcciones. Por eso conviene reservar un rango distinto para cada entorno y apuntarlo en algún sitio.
+Aquí usamos `10.0.0.0/16`, que da 65.536 direcciones. Pero el tamaño no es lo único que decide. Dos VPC con rangos solapados no se pueden emparejar. Si algún día necesitas VPC peering, un Transit Gateway o una VPN contra la red de una empresa, cualquier solapamiento te obliga a rehacer la red o a montar traducción de direcciones. Reserva un rango distinto para cada entorno y apúntalo en algún sitio.
 
-> **Nota.** AWS acepta máscaras de `/16` a `/28` para una VPC. Un `/16` es un punto de partida cómodo porque deja libre el tercer octeto entero.
+> **Nota.** AWS acepta máscaras de `/16` a `/28` para una VPC. Un `/16` deja libre el tercer octeto entero.
 
 ### Cómo se calculan las subredes
 
-Las subredes no están escritas a mano. Se calculan con la función `cidrsubnet` de Terraform, que parte una red en trozos.
+Las subredes no están escritas a mano. Se calculan con `cidrsubnet`, que parte una red en trozos.
 
 ```
 cidrsubnet("10.0.0.0/16", 8, 17)
@@ -172,7 +168,7 @@ cidrsubnet("10.0.0.0/16", 8, 17)
 /16 + 8 bits = /24        →  el bloque 17 es 10.0.17.0/24
 ```
 
-Añadir 8 bits a un `/16` da redes `/24`. Como quedan 8 bits para numerar bloques, hay 256 disponibles, de `10.0.0.0/24` a `10.0.255.0/24`. El tercer octeto del resultado coincide con el número de bloque, así que el direccionamiento se lee de un vistazo.
+Añadir 8 bits a un `/16` da redes `/24`. Quedan 8 bits para numerar bloques, así que hay 256 disponibles, de `10.0.0.0/24` a `10.0.255.0/24`. El tercer octeto coincide con el número de bloque, así que el direccionamiento se lee de un vistazo.
 
 El número de bloque sale de sumar dos valores.
 
@@ -192,11 +188,11 @@ Con los valores por defecto (`public = 0`, `private = 16`, `data = 32`) sale est
 
 ### Por qué las capas van de 16 en 16
 
-Esa separación reserva 16 bloques `/24` a cada capa, y eso tiene dos efectos prácticos.
+Esa separación reserva 16 bloques `/24` a cada capa, y tiene dos efectos prácticos.
 
-El primero es que puedes crecer hasta 16 zonas por capa sin renumerar nada. Si mañana pasas de 2 zonas a 3, la nueva subred privada será `10.0.18.0/24`, que ya está libre. Con capas pegadas una detrás de otra, añadir una zona se metería en el rango de la capa siguiente y habría que mover subredes que ya existen. En Terraform eso significa destruirlas y recrearlas.
+Puedes crecer hasta 16 zonas por capa sin renumerar nada. Si mañana pasas de 2 zonas a 3, la nueva subred privada será `10.0.18.0/24`, que ya está libre. Con capas pegadas una detrás de otra, añadir una zona se metería en el rango de la siguiente y habría que mover subredes existentes. En Terraform eso significa destruirlas y recrearlas.
 
-El segundo es que se lee más rápido en una incidencia. Al ver una dirección en un log sabes de qué capa es por el tercer octeto. De 0 a 15 pública, de 16 a 31 privada, de 32 a 47 datos.
+Y se lee más rápido en una incidencia. Al ver una dirección en un log sabes de qué capa es por el tercer octeto. De 0 a 15 pública, de 16 a 31 privada, de 32 a 47 datos.
 
 La variable valida que los offsets sean múltiplos de 16, para que el esquema no se rompa por descuido.
 
@@ -219,17 +215,17 @@ Un `/24` tiene 256 direcciones. AWS reserva cinco en toda subred.
 | `.3` | Reservada para uso futuro |
 | `.255` | Dirección de difusión |
 
-Quedan 251 direcciones útiles por subred. Es un tamaño razonable para la mayoría de cargas.
+Quedan 251 direcciones útiles por subred.
 
-El compromiso va en las dos direcciones y conviene conocerlo. Con subredes más pequeñas, como un `/26` de 59 direcciones útiles, te arriesgas a quedarte sin IPs. En Amazon EKS cada pod consume una dirección de la subred, y en Fargate cada tarea consume otra, así que una subred pequeña te limita la escala antes que la CPU o la memoria. Con subredes más grandes, como un `/20`, desperdicias espacio que quizá quieras para otras capas o entornos dentro del mismo rango.
+El compromiso va en las dos direcciones. Con subredes más pequeñas, como un `/26` de 59 direcciones útiles, te arriesgas a quedarte sin IPs. En Amazon EKS cada pod consume una dirección de la subred, y en Fargate cada tarea consume otra, así que la subred te limita la escala antes que la CPU o la memoria. Con subredes más grandes, como un `/20`, desperdicias espacio que quizá quieras para otras capas o entornos.
 
-> **Nota.** El tamaño se cambia en el módulo tocando el segundo argumento de `cidrsubnet`. Pero hacerlo sobre una red ya desplegada implica recrear las subredes y todo lo que viva dentro.
+> **Nota.** El tamaño se cambia tocando el segundo argumento de `cidrsubnet`. Hacerlo sobre una red ya desplegada implica recrear las subredes y todo lo que viva dentro.
 
 ---
 
 ## Salida a internet sin exposición
 
-La capa privada tiene una necesidad que parece contradictoria. La aplicación necesita salir a internet para bajar actualizaciones o llamar a APIs de terceros. Y nadie de fuera debe poder iniciar una conexión hacia ella. Son dos cosas distintas y se confunden a menudo.
+La aplicación necesita salir a internet para bajar actualizaciones o llamar a APIs de terceros. Y nadie de fuera debe poder iniciar una conexión hacia ella. Son dos cosas distintas y se confunden a menudo.
 
 ```mermaid
 flowchart LR
@@ -255,7 +251,7 @@ flowchart LR
 
 El NAT Gateway resuelve la primera mitad. Traduce las conexiones que salen y deja volver sus respuestas, pero no acepta nada que empiece fuera. Es asimétrico a propósito.
 
-La variable `nat_strategy` decide cuántos se despliegan.
+`nat_strategy` decide cuántos se despliegan.
 
 | Valor | NAT desplegados | Si se cae una zona |
 |---|---|---|
@@ -263,7 +259,7 @@ La variable `nat_strategy` decide cuántos se despliegan.
 | `single` | Uno, en la primera zona | Si cae esa zona, todas las subredes privadas pierden la salida |
 | `per_az` | Uno por zona | Las demás zonas siguen funcionando |
 
-Las tablas de rutas privadas se crean por zona en los tres casos. Así que pasar de `single` a `per_az` es cambiar una variable, no rehacer el módulo.
+Las tablas de rutas privadas se crean por zona en los tres casos. Pasar de `single` a `per_az` es cambiar una variable, no rehacer el módulo.
 
 ---
 
@@ -301,8 +297,6 @@ sequenceDiagram
     Note over OP,EC2: CloudTrail registra quién abrió la sesión.<br/>El log de comandos puede volcarse a S3.
 ```
 
-La comparación queda así.
-
 | | Bastión con SSH | Session Manager |
 |---|---|---|
 | Puertos de entrada abiertos | 22, expuesto a internet | Ninguno |
@@ -319,9 +313,9 @@ El módulo despliega tres endpoints y los tres hacen falta.
 | `ssmmessages` | El canal de datos de la sesión interactiva |
 | `ec2messages` | La comunicación del agente con el servicio |
 
-Son estos endpoints los que hacen que todo esto funcione en la capa de datos, que no tiene ruta a internet. El tráfico hacia la API de AWS entra por una interfaz de red que vive dentro de tu VPC y no llega a pasar por la red pública.
+Estos endpoints son los que hacen que todo funcione en la capa de datos, que no tiene ruta a internet. El tráfico hacia la API de AWS entra por una interfaz de red que vive dentro de tu VPC y no pasa por la red pública.
 
-> **Nota.** Session Manager necesita que la VPC tenga `enable_dns_support` y `enable_dns_hostnames` activados. Sin resolución DNS, los endpoints no resuelven sus nombres privados y la sesión no se abre nunca. Los dos valores están fijados en el módulo y hay una prueba que lo comprueba.
+> **Nota.** Session Manager necesita `enable_dns_support` y `enable_dns_hostnames` en la VPC. Sin resolución DNS, los endpoints no resuelven sus nombres privados y la sesión no se abre. Los dos están fijados en el módulo y hay una prueba que lo comprueba.
 
 ---
 
@@ -367,18 +361,14 @@ Lo que no encaje con ninguna regla queda denegado por la regla implícita que ci
 
 ## El estado de Terraform en S3
 
-Terraform guarda un archivo de estado con la correspondencia entre lo que declara tu código y lo que existe de verdad en AWS. Es el registro que le permite saber que `aws_vpc.this` es `vpc-0b6e701a441c2648c`.
-
-### Por qué no dejarlo en local
+Terraform guarda un archivo de estado con la correspondencia entre lo que declara tu código y lo que existe en AWS. Es lo que le permite saber que `aws_vpc.this` es `vpc-0b6e701a441c2648c`.
 
 Por defecto ese archivo se guarda junto al código. En cuanto el proyecto deja de ser de una sola persona, eso da problemas.
 
 - **Nadie más puede trabajar.** Si el estado está en tu portátil, un compañero que ejecute `apply` no sabe qué existe ya e intenta crear cosas duplicadas.
 - **No hay bloqueo.** Dos ejecuciones a la vez parten del mismo estado y la última en escribir pisa a la otra. Quedan recursos huérfanos que Terraform ya no controla.
 - **No hay copia de seguridad.** El estado es el único registro de lo que has desplegado. Si se corrompe o se borra, recuperar el control significa importar los recursos uno a uno.
-- **Se sube al repo sin querer.** El archivo tiene valores en claro, incluidos los que marques como sensibles. Acaba en git más veces de las que debería.
-
-### Qué aporta el bucket
+- **Se sube al repo sin querer.** El archivo tiene valores en claro, incluidos los que marques como sensibles.
 
 El stack de `bootstrap/` crea un bucket de S3 configurado para tapar esos agujeros.
 
@@ -402,27 +392,28 @@ terraform {
 }
 ```
 
-> **Nota.** `use_lockfile` existe desde Terraform 1.11. Antes el bloqueo pedía una tabla de DynamoDB dedicada solo a eso, con su coste y su mantenimiento. Si miras guías más viejas, verás esa tabla en todos los ejemplos.
+> **Nota.** `use_lockfile` existe desde Terraform 1.11. Antes el bloqueo pedía una tabla de DynamoDB dedicada solo a eso. Si miras guías más viejas, verás esa tabla en todos los ejemplos.
 
-### Un estado por entorno
+Cada entorno escribe en una ruta distinta del mismo bucket, que marca el atributo `key`. Dos configuraciones apuntando a la misma ruta compartirían estado, y un `apply` en una podría destruir los recursos de la otra.
 
-Cada entorno escribe en una ruta distinta del mismo bucket, que marca el atributo `key`. Dos configuraciones apuntando a la misma ruta compartirían estado, y un `apply` en una podría destruir los recursos de la otra. Separarlas por `key` mantiene acotado el alcance de un error.
+El nombre del bucket no está en el código. Los nombres de bucket de S3 son únicos en todo AWS, no dentro de tu cuenta. Como el nombre lleva el identificador de cuenta, escribirlo en `backend.tf` haría que el repositorio solo funcionase en la cuenta de quien lo creó. Por eso el bloque `backend` se deja incompleto y los valores se pasan al inicializar, con un archivo `backend.hcl` que git ignora y del que se versiona una plantilla `.example`. La técnica se llama *partial backend configuration*. El backend se evalúa antes que las variables y los `locals`, así que no hay forma de calcular ese nombre dentro de Terraform.
 
-### El nombre del bucket no está en el código
+---
 
-Los nombres de bucket de S3 son únicos en todo AWS, no dentro de tu cuenta. Como el nombre lleva el identificador de cuenta, escribirlo en `backend.tf` haría que el repositorio solo funcionase en la cuenta de quien lo creó. Cualquier otra persona fallaría en el primer `init`.
+## Herramientas
 
-Por eso el bloque `backend` se deja incompleto y los valores se pasan al inicializar, con un archivo `backend.hcl` que git ignora y del que se versiona una plantilla `.example`. La técnica se llama *partial backend configuration*.
+- **Terraform 1.11 o superior.** Hace falta esa versión por el bloqueo de estado nativo de S3. Las pruebas usan `terraform test`, que viene incluido.
+- **AWS CLI.** Para las credenciales y para abrir sesiones con `aws ssm start-session`.
+- **make.** Atajos de las tareas repetidas. `make help` los lista.
+- **Amazon Linux 2023.** La AMI de la instancia de demostración. Se resuelve con un data source, así que no hay ningún ID fijo en el código.
 
-El backend se evalúa antes que las variables y los `locals`, así que no hay forma de calcular ese nombre dentro de Terraform.
+El provider de AWS está fijado a la serie `~> 5.0`. Los archivos `.terraform.lock.hcl` están versionados, así que todo el mundo instala las mismas versiones.
 
 ---
 
 ## Antes de empezar
 
-Necesitas Terraform 1.11 o superior, por el bloqueo nativo de S3. También el AWS CLI configurado con credenciales válidas, y permisos para crear recursos de VPC, IAM, S3 y CloudWatch.
-
-Comprueba las dos cosas.
+Necesitas Terraform 1.11 o superior, el AWS CLI configurado con credenciales válidas, y permisos para crear recursos de VPC, IAM, S3 y CloudWatch.
 
 ```bash
 terraform version
@@ -433,7 +424,7 @@ aws sts get-caller-identity
 
 ## Paso 1. Probar el módulo
 
-Antes de montar el backend remoto puedes desplegar la arquitectura entera con el ejemplo autocontenido. Guarda el estado en un archivo local y no necesita ninguna preparación.
+Antes de montar el backend remoto puedes desplegar la arquitectura entera con el ejemplo autocontenido. Guarda el estado en un archivo local y no necesita preparación.
 
 ```bash
 git clone git@github.com:Rxcxrdx/aws-three-tier-vpc-terraform.git
@@ -459,9 +450,7 @@ terraform destroy
 
 ## Paso 2. Crear el bucket de estado
 
-Esto se hace una sola vez por cuenta. El stack de `bootstrap/` crea el bucket donde los entornos guardarán su estado, incluido el suyo propio. Y ahí hay una dependencia circular, porque la primera ejecución no puede usar un bucket que todavía no existe.
-
-Se resuelve en dos fases.
+Esto se hace una sola vez por cuenta. El stack de `bootstrap/` crea el bucket donde los entornos guardan su estado, incluido el suyo propio. Ahí hay una dependencia circular, porque la primera ejecución no puede usar un bucket que todavía no existe. Se resuelve en dos fases.
 
 **Fase 1.** Abre `bootstrap/backend.tf` y comenta el bloque `terraform { backend "s3" { ... } }`. Terraform usará un estado local.
 
@@ -484,7 +473,7 @@ cp backend.hcl.example backend.hcl
 terraform init -backend-config=backend.hcl -migrate-state
 ```
 
-Terraform ve que hay un estado local y te ofrece copiarlo al backend remoto. Si aceptas, el archivo local ya no sirve y lo puedes borrar.
+Terraform ve que hay un estado local y te ofrece copiarlo al backend remoto. Si aceptas, el archivo local ya no sirve.
 
 ---
 
@@ -501,7 +490,7 @@ terraform plan
 terraform apply
 ```
 
-Lee siempre la salida de `plan` antes de aplicar. Debe crear la VPC, seis subredes, las tablas de rutas, el NAT Gateway, los tres endpoints de SSM, los security groups y la NACL.
+Lee la salida de `plan` antes de aplicar. Debe crear la VPC, seis subredes, las tablas de rutas, el NAT Gateway, los tres endpoints de SSM, los security groups y la NACL.
 
 ---
 
@@ -532,7 +521,7 @@ cd envs/dev
 terraform destroy
 ```
 
-El repositorio trae atajos equivalentes.
+Los atajos equivalentes.
 
 ```bash
 make nuke     # destruye el entorno
@@ -543,7 +532,7 @@ make cost     # comprueba que no queda nada activo en la cuenta
 
 ---
 
-## Ejecutar las pruebas
+## Pruebas
 
 ```bash
 terraform test
@@ -571,9 +560,21 @@ Las pruebas corren con `nat_strategy = "none"` y los endpoints apagados, así qu
 
 **Los tags se usan como datos.** Las asociaciones de tablas de rutas y los outputs filtran por el tag `Tier`. La alternativa era interpretar el prefijo del nombre de la clave, y eso ata el módulo a un formato de texto que cualquiera puede cambiar.
 
-**Las reglas de firewall son recursos sueltos.** Usar `aws_vpc_security_group_ingress_rule` en vez de bloques `ingress` anidados hace que cada regla tenga su propia entrada en el estado. Añadir una no reescribe las demás, y el `plan` enseña exactamente cuál cambia.
+**Las reglas de firewall son recursos sueltos.** `aws_vpc_security_group_ingress_rule` en vez de bloques `ingress` anidados hace que cada regla tenga su propia entrada en el estado. Añadir una no reescribe las demás, y el `plan` enseña exactamente cuál cambia.
 
-**El security group por defecto se vacía.** AWS crea uno con cada VPC que permite todo el tráfico entre los recursos que lo tengan puesto, y es el que reciben las instancias lanzadas sin especificar security group. Como no se puede borrar, el módulo lo adopta y lo deja sin reglas. Así, una instancia que caiga ahí por descuido no puede hablar con nada.
+**El security group por defecto se vacía.** AWS crea uno con cada VPC que permite todo el tráfico entre los recursos que lo tengan puesto, y es el que reciben las instancias lanzadas sin especificar security group. Como no se puede borrar, el módulo lo adopta y lo deja sin reglas.
+
+---
+
+## Bugs
+
+Si algo no funciona o hay una parte confusa, abre una issue. Incluye lo siguiente.
+
+- el directorio donde pasó, por ejemplo `envs/dev` o `examples/minimal`
+- el comando que ejecutaste
+- la versión de Terraform y la del provider de AWS
+- qué esperabas ver
+- qué viste
 
 ---
 
@@ -583,15 +584,13 @@ Las pruebas corren con `nat_strategy = "none"` y los endpoints apagados, así qu
 
 **Session Manager no conecta aunque los endpoints existan.** Mira `enable_dns_support` y `enable_dns_hostnames` en la VPC. Sin ellos los endpoints no resuelven sus nombres privados. El síntoma aparece bastante después de la causa y el error no habla del DNS.
 
-**Una prueba falla con `Unknown condition value`.** La aserción depende de un valor que no se conoce hasta el `apply`, como el identificador de un security group. Durante el `plan` ese valor es *known after apply* y la condición no se puede evaluar. Ejecuta esa prueba con `command = apply`, o reescribe la aserción sobre un atributo que sí se conozca en la fase de planificación.
+**Una prueba falla con `Unknown condition value`.** La aserción depende de un valor que no se conoce hasta el `apply`, como el identificador de un security group. Durante el `plan` ese valor es *known after apply*. Ejecuta esa prueba con `command = apply`, o reescribe la aserción sobre un atributo que sí se conozca al planificar.
 
-**Queda un NAT Gateway activo después de interrumpir las pruebas.** Si una ejecución se corta antes del teardown, lo que se creó se queda. Ejecuta `make cost` para encontrarlo. Las pruebas de este repositorio usan `nat_strategy = "none"` para que eso no pase.
+**Queda un NAT Gateway activo después de interrumpir las pruebas.** Si una ejecución se corta antes del teardown, lo que se creó se queda. Ejecuta `make cost` para encontrarlo. Las pruebas usan `nat_strategy = "none"` para que eso no pase.
 
 ---
 
 ## Referencia
-
-### Estructura del repositorio
 
 ```
 ├── bootstrap/          Bucket de estado versionado y cifrado. Se ejecuta una vez.
@@ -603,14 +602,10 @@ Las pruebas corren con `nat_strategy = "none"` y los endpoints apagados, así qu
 └── tests/              Suite de terraform test
 ```
 
-### Documentación de los módulos
-
 Cada módulo documenta sus entradas, sus salidas y sus compromisos de diseño.
 
 - [modules/network](modules/network/README.md)
 - [modules/security](modules/security/README.md)
 - [bootstrap](bootstrap/README.md)
 
-### Licencia
-
-MIT. Está en el archivo [LICENSE](LICENSE).
+MIT. La licencia está en [LICENSE](LICENSE).
