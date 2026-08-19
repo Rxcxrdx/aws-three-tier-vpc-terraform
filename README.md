@@ -1,95 +1,124 @@
-# VPC de tres capas en AWS con Terraform
+<h1 align="center">Three-Tier VPC on AWS with Terraform</h1>
 
-Red segmentada en AWS para una aplicación web de tres capas. Un balanceador abierto a internet, una capa de aplicación aislada y una capa de datos sin salida al exterior.
+<p align="center">
+  <img src="https://img.shields.io/badge/Terraform-%3E%3D%201.11-7B42BC?logo=terraform&logoColor=white" alt="Terraform >= 1.11">
+  <img src="https://img.shields.io/badge/AWS%20Provider-~%3E%205.0-FF9900?logo=amazonaws&logoColor=white" alt="AWS Provider ~> 5.0">
+  <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status stable">
+  <img src="https://img.shields.io/badge/tests-10%20runs%2C%2019%20assertions-informational" alt="10 test runs, 19 assertions">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
+</p>
 
-Está escrito como módulos de Terraform reutilizables. Se administra sin SSH ni bastión y se verifica con pruebas automatizadas.
-
-El repositorio sirve para desplegarse y para leerse. Cada sección dice primero por qué se toma una decisión y luego cómo se implementa.
-
-## Contenido
-
-- [Qué se despliega](#qué-se-despliega)
-- [Arquitectura de tres capas](#arquitectura-de-tres-capas)
-- [Cómo viaja una petición](#cómo-viaja-una-petición)
-- [Diseño del direccionamiento](#diseño-del-direccionamiento)
-- [Salida a internet sin exposición](#salida-a-internet-sin-exposición)
-- [Administración sin SSH con Session Manager](#administración-sin-ssh-con-session-manager)
-- [Las dos barreras de la capa de datos](#las-dos-barreras-de-la-capa-de-datos)
-- [El estado de Terraform en S3](#el-estado-de-terraform-en-s3)
-- [Herramientas](#herramientas)
-- [Antes de empezar](#antes-de-empezar)
-- [Paso 1. Probar el módulo](#paso-1-probar-el-módulo)
-- [Paso 2. Crear el bucket de estado](#paso-2-crear-el-bucket-de-estado)
-- [Paso 3. Desplegar el entorno](#paso-3-desplegar-el-entorno)
-- [Paso 4. Comprobar el acceso sin SSH](#paso-4-comprobar-el-acceso-sin-ssh)
-- [Limpieza](#limpieza)
-- [Pruebas](#pruebas)
-- [Decisiones de implementación](#decisiones-de-implementación)
-- [Bugs](#bugs)
-- [Solución de problemas](#solución-de-problemas)
-- [Referencia](#referencia)
-
----
-
-## Qué se despliega
-
-- Una VPC con resolución DNS habilitada
-- Seis subredes, tres capas por dos zonas de disponibilidad
-- Un Internet Gateway y una tabla de rutas por capa
-- NAT Gateway configurable, para que la capa privada salga sin ser alcanzable
-- Interface endpoints de Systems Manager, para entrar a las máquinas sin abrir puertos
-- Tres security groups encadenados y una NACL en la capa de datos
-- Flow logs de la VPC en CloudWatch
+<p align="center">
+  A segmented AWS network for a three-tier web app.<br>
+  Reusable Terraform modules, no SSH, no bastion, covered by automated tests.
+</p>
 
 ```mermaid
 flowchart TB
     NET(("Internet"))
 
     subgraph VPC["VPC · 10.0.0.0/16"]
-        subgraph PUB["CAPA PÚBLICA · 10.0.0.0/24 · 10.0.1.0/24"]
-            ALB["Balanceador de carga<br/>sg: alb"]
+        subgraph PUB["PUBLIC TIER · 10.0.0.0/24 · 10.0.1.0/24"]
+            ALB["Load balancer<br/>sg: alb"]
         end
 
-        subgraph PRI["CAPA PRIVADA · 10.0.16.0/24 · 10.0.17.0/24"]
-            APP["Aplicación<br/>sg: app"]
+        subgraph PRI["PRIVATE TIER · 10.0.16.0/24 · 10.0.17.0/24"]
+            APP["Application<br/>sg: app"]
         end
 
-        subgraph DAT["CAPA DE DATOS · 10.0.32.0/24 · 10.0.33.0/24"]
-            DB["Base de datos<br/>sg: db + NACL"]
+        subgraph DAT["DATA TIER · 10.0.32.0/24 · 10.0.33.0/24"]
+            DB["Database<br/>sg: db + NACL"]
         end
     end
 
-    NET -->|"443 · único punto de entrada"| ALB
-    ALB -->|"8080 · solo desde el sg alb"| APP
-    APP -->|"5432 · solo desde el sg app"| DB
+    NET -->|"443 · only way in"| ALB
+    ALB -->|"8080 · only from sg alb"| APP
+    APP -->|"5432 · only from sg app"| DB
 
     style PUB fill:#1f3d2b,stroke:#4caf7d,color:#e8f5ee
     style PRI fill:#1f2f42,stroke:#5b9bd5,color:#e8f0f8
     style DAT fill:#42272a,stroke:#c1666b,color:#f8ebec
 ```
 
-Mira lo que falta en el diagrama. Ninguna flecha une la capa de datos con internet. Eso no se consigue con una regla que lo prohíba, sino con una ausencia. La tabla de rutas de esas subredes no tiene ninguna entrada hacia `0.0.0.0/0`. El camino no existe.
+## Table of contents
+
+- [Project description](#project-description)
+- [Project status](#project-status)
+- [Features](#features)
+- [Architecture](#architecture)
+  - [Why three tiers](#why-three-tiers)
+  - [How a request travels](#how-a-request-travels)
+  - [Addressing design](#addressing-design)
+  - [Egress without exposure](#egress-without-exposure)
+  - [SSH-free access with Session Manager](#ssh-free-access-with-session-manager)
+  - [Two barriers on the data tier](#two-barriers-on-the-data-tier)
+  - [Terraform state on S3](#terraform-state-on-s3)
+- [Running the project](#running-the-project)
+  - [Requirements](#requirements)
+  - [Step 1. Try the module](#step-1-try-the-module)
+  - [Step 2. Create the state bucket](#step-2-create-the-state-bucket)
+  - [Step 3. Deploy the environment](#step-3-deploy-the-environment)
+  - [Step 4. Prove SSH-free access](#step-4-prove-ssh-free-access)
+  - [Cleanup](#cleanup)
+  - [Tests](#tests)
+- [Technologies used](#technologies-used)
+- [Implementation decisions](#implementation-decisions)
+- [Troubleshooting](#troubleshooting)
+- [Bugs](#bugs)
+- [Author](#author)
+- [License](#license)
 
 ---
 
-## Arquitectura de tres capas
+## Project description
 
-Lo más rápido para desplegar algo en AWS es una VPC plana. Todas las instancias en subredes públicas, cada una con su IP pública, y los security groups como único filtro. Funciona y se monta en minutos.
+This project builds a segmented AWS network for a three-tier web application. A load balancer open to the internet, an isolated application tier, and a data tier with no route out.
 
-El problema aparece cuando algo falla. Cualquier instancia con IP pública forma parte de la superficie expuesta. Una sola regla mal escrita deja la base de datos accesible desde internet. Como todo comparte el mismo espacio de red, que la configuración sea correcta depende de que todas las reglas estén bien todo el tiempo.
+It is written as reusable Terraform modules. Machines are administered without SSH and without a bastion host. Ten automated tests cover the acceptance criteria, and none of them leave billable infrastructure behind.
 
-Al dividir la red en capas cambia la pregunta de seguridad. Ya no es si cada regla está bien. Es hasta dónde llega alguien que comprometa una capa concreta. Y esa pregunta tiene una respuesta acotada.
+The repository is meant to be deployed and also to be read. Every section states why a decision was made before showing how it was implemented.
+
+## Project status
+
+Stable and complete. The modules deploy, and the documentation matches the code.
+
+The natural next steps would be a CI pipeline and a `prod` environment using `nat_strategy = "per_az"`.
+
+## Features
+
+- A VPC with DNS resolution enabled
+- Six subnets, three tiers across two availability zones
+- An Internet Gateway and one route table per tier
+- Configurable NAT Gateway, so the private tier can reach out without being reachable
+- Systems Manager interface endpoints, so you can get a shell without opening any port
+- Three chained security groups plus a network ACL on the data tier
+- VPC flow logs in CloudWatch
+- A self-contained example that runs with local state and no setup
+
+Look at what the diagram above is missing. No arrow connects the data tier to the internet. That is not achieved with a deny rule. It is achieved with an absence, because the route table for those subnets has no `0.0.0.0/0` entry at all. The path does not exist.
+
+---
+
+## Architecture
+
+### Why three tiers
+
+The fastest way to ship something on AWS is a flat VPC. Every instance in a public subnet, each with a public IP, and security groups as the only filter. It works and it takes minutes.
+
+The problem shows up when something goes wrong. Any instance with a public IP is part of the attack surface. One badly written rule leaves the database reachable from the internet. Since everything shares the same network space, correctness depends on every rule being right all of the time.
+
+Splitting the network into tiers changes the security question. It stops being whether each rule is correct. It becomes how far someone gets after compromising one tier. And that question has a bounded answer.
 
 ```mermaid
 flowchart LR
-    ATK["Atacante<br/>controla el balanceador"]
+    ATK["Attacker<br/>controls the load balancer"]
 
-    ATK -->|"puede"| A1["Alcanzar el puerto 8080<br/>de la capa de aplicación"]
-    ATK -->|"NO puede"| B1["Llegar al 5432<br/>de la base de datos"]
-    ATK -->|"NO puede"| B2["Ver ninguna otra VM<br/>de la capa privada"]
+    ATK -->|"can"| A1["Reach port 8080<br/>on the application tier"]
+    ATK -->|"CANNOT"| B1["Reach 5432<br/>on the database"]
+    ATK -->|"CANNOT"| B2["See any other VM<br/>on the private tier"]
 
-    A1 -->|"si escala"| C1["Alcanzar el 5432<br/>de la base de datos"]
-    A1 -->|"aún NO puede"| D1["Sacar datos<br/>directamente a internet<br/>desde la capa de datos"]
+    A1 -->|"if it escalates"| C1["Reach 5432<br/>on the database"]
+    A1 -->|"still CANNOT"| D1["Push data straight<br/>to the internet<br/>from the data tier"]
 
     style ATK fill:#42272a,stroke:#c1666b,color:#f8ebec
     style B1 fill:#1f3d2b,stroke:#4caf7d,color:#e8f5ee
@@ -97,104 +126,94 @@ flowchart LR
     style D1 fill:#1f3d2b,stroke:#4caf7d,color:#e8f5ee
 ```
 
-Cada capa acepta tráfico de un solo sitio y por un solo puerto. El balanceador es lo único que se alcanza desde internet, y lo único que habla con la aplicación. La base de datos solo atiende a la aplicación. Comprometer una capa da acceso a la siguiente, no a todo.
+Each tier accepts traffic from one place and on one port. The load balancer is the only thing reachable from the internet, and the only thing that talks to the application. The database only answers the application. Compromising one tier buys the next one, not the whole thing.
 
-La capa de datos tiene algo que las otras no. Al no tener ruta de salida, tampoco sirve para sacar información. Quien llegue ahí tiene que volver por donde vino, y ese camino pasa por capas que registran su tráfico en los flow logs.
+The data tier has something the others do not. With no egress route, it is also useless for pulling data out. Whoever lands there has to go back the way they came, and that path crosses tiers that record their traffic in flow logs.
 
-Hay un motivo más formal. PCI DSS, ISO 27001 y casi todos los marcos de auditoría piden que los datos estén en una red sin acceso directo a internet. La evidencia es la tabla de rutas de la capa de datos, que no tiene ruta por defecto.
+There is a duller reason too. PCI DSS, ISO 27001 and most audit frameworks require data to sit on a network with no direct internet access. The evidence is the data tier route table, which has no default route.
 
----
-
-## Cómo viaja una petición
+### How a request travels
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as Usuario
+    participant U as User
     participant IGW as Internet Gateway
-    participant ALB as Balanceador<br/>capa pública
-    participant APP as Aplicación<br/>capa privada
-    participant DB as Base de datos<br/>capa de datos
+    participant ALB as Load balancer<br/>public tier
+    participant APP as Application<br/>private tier
+    participant DB as Database<br/>data tier
 
     U->>IGW: HTTPS 443
-    IGW->>ALB: la tabla pública tiene ruta 0.0.0.0/0
-    Note over ALB: sg alb permite 80 y 443<br/>desde cualquier origen
+    IGW->>ALB: the public route table has a 0.0.0.0/0 route
+    Note over ALB: sg alb allows 80 and 443<br/>from any source
     ALB->>APP: 8080
-    Note over APP: sg app permite 8080,<br/>pero SOLO desde el sg del ALB
+    Note over APP: sg app allows 8080,<br/>but ONLY from the ALB sg
     APP->>DB: 5432
-    Note over DB: sg db permite 5432,<br/>pero SOLO desde el sg de app<br/>y el NACL exige origen interno
-    DB-->>APP: resultado
-    APP-->>ALB: respuesta
+    Note over DB: sg db allows 5432,<br/>but ONLY from the app sg,<br/>and the NACL demands an internal source
+    DB-->>APP: result
+    APP-->>ALB: response
     ALB-->>U: HTTPS 443
 ```
 
-Fíjate en los pasos 3 y 5. Las reglas no autorizan un rango de direcciones, autorizan un security group. La de la capa de aplicación dice que acepta tráfico de lo que tenga puesto el security group `alb`.
+Look at steps 3 and 5. The rules do not authorize an address range, they authorize a security group. The application tier rule says it accepts traffic from whatever carries the `alb` security group.
 
-La diferencia se nota cuando alguien lanza una máquina nueva en la subred privada. Con un CIDR, esa máquina habla con la base de datos solo por estar en la subred correcta. Con una referencia a security group no puede, salvo que alguien le asigne el grupo a propósito. El permiso deja de depender de dónde está la máquina y pasa a depender de qué es.
+The difference shows up when someone launches a new machine in the private subnet. With a CIDR, that machine can talk to the database just by sitting in the right subnet. With a security group reference it cannot, unless someone assigns the group on purpose. The permission stops depending on where the machine is and starts depending on what it is.
 
-Estas reglas aguantan además los cambios de direccionamiento. Si renumeras la red mañana, siguen siendo correctas sin tocarlas.
+These rules also survive renumbering. If you change the addressing tomorrow, they are still correct without edits.
 
----
+### Addressing design
 
-## Diseño del direccionamiento
+A VPC CIDR block cannot be shrunk or changed once the VPC exists. You can add secondary blocks, but the primary range is permanent. It is worth thinking through before writing the first line.
 
-El bloque CIDR de una VPC no se puede reducir ni cambiar una vez creada. Se pueden añadir bloques secundarios, pero el rango principal es para siempre. Conviene pensarlo antes de escribir la primera línea.
+RFC 1918 defines the private ranges available.
 
-### Elegir el rango de la VPC
-
-Las direcciones privadas disponibles son las del RFC 1918.
-
-| Rango | Máscara | Direcciones |
+| Range | Mask | Addresses |
 |---|---|---|
-| `10.0.0.0` | `/8` | 16.777.216 |
-| `172.16.0.0` | `/12` | 1.048.576 |
-| `192.168.0.0` | `/16` | 65.536 |
+| `10.0.0.0` | `/8` | 16,777,216 |
+| `172.16.0.0` | `/12` | 1,048,576 |
+| `192.168.0.0` | `/16` | 65,536 |
 
-Aquí usamos `10.0.0.0/16`, que da 65.536 direcciones. Pero el tamaño no es lo único que decide. Dos VPC con rangos solapados no se pueden emparejar. Si algún día necesitas VPC peering, un Transit Gateway o una VPN contra la red de una empresa, cualquier solapamiento te obliga a rehacer la red o a montar traducción de direcciones. Reserva un rango distinto para cada entorno y apúntalo en algún sitio.
+We use `10.0.0.0/16`, which gives 65,536 addresses. But size is not the only thing that decides it. Two VPCs with overlapping ranges cannot be peered. If you ever need VPC peering, a Transit Gateway, or a VPN into a corporate network, any overlap forces you to rebuild the network or bolt on address translation. Reserve a different range per environment and write it down somewhere.
 
-> **Nota.** AWS acepta máscaras de `/16` a `/28` para una VPC. Un `/16` deja libre el tercer octeto entero.
+> **Note.** AWS accepts masks from `/16` to `/28` for a VPC. A `/16` leaves the whole third octet free.
 
-### Cómo se calculan las subredes
-
-Las subredes no están escritas a mano. Se calculan con `cidrsubnet`, que parte una red en trozos.
+Subnets are not hand written. They are computed with `cidrsubnet`, which slices a network into blocks.
 
 ```
 cidrsubnet("10.0.0.0/16", 8, 17)
               │            │   │
-              │            │   └── número de bloque que quieres
-              │            └────── bits que añades al prefijo
-              └─────────────────── red de partida
+              │            │   └── block number you want
+              │            └────── bits added to the prefix
+              └─────────────────── starting network
 
-/16 + 8 bits = /24        →  el bloque 17 es 10.0.17.0/24
+/16 + 8 bits = /24        →  block 17 is 10.0.17.0/24
 ```
 
-Añadir 8 bits a un `/16` da redes `/24`. Quedan 8 bits para numerar bloques, así que hay 256 disponibles, de `10.0.0.0/24` a `10.0.255.0/24`. El tercer octeto coincide con el número de bloque, así que el direccionamiento se lee de un vistazo.
+Adding 8 bits to a `/16` yields `/24` networks. That leaves 8 bits to number blocks, so there are 256 of them, from `10.0.0.0/24` to `10.0.255.0/24`. The third octet matches the block number, which makes the addressing readable at a glance.
 
-El número de bloque sale de sumar dos valores.
+The block number comes from adding two values.
 
 ```hcl
 cidr = cidrsubnet(var.vpc_cidr, 8, offset + idx)
 ```
 
-`offset` identifica la capa y viene de la variable `tier_offsets`. `idx` identifica la zona, y vale 0 para la primera y 1 para la segunda.
+`offset` identifies the tier and comes from the `tier_offsets` variable. `idx` identifies the availability zone, and it is 0 for the first and 1 for the second.
 
-Con los valores por defecto (`public = 0`, `private = 16`, `data = 32`) sale esto.
+With the defaults (`public = 0`, `private = 16`, `data = 32`) you get this.
 
-| Capa | Offset | Zona a (idx 0) | Zona b (idx 1) |
+| Tier | Offset | Zone a (idx 0) | Zone b (idx 1) |
 |---|---|---|---|
-| Pública | 0 | `10.0.0.0/24` | `10.0.1.0/24` |
-| Privada | 16 | `10.0.16.0/24` | `10.0.17.0/24` |
-| Datos | 32 | `10.0.32.0/24` | `10.0.33.0/24` |
+| Public | 0 | `10.0.0.0/24` | `10.0.1.0/24` |
+| Private | 16 | `10.0.16.0/24` | `10.0.17.0/24` |
+| Data | 32 | `10.0.32.0/24` | `10.0.33.0/24` |
 
-### Por qué las capas van de 16 en 16
+**Why tiers are 16 apart.** That gap reserves 16 `/24` blocks per tier, and it buys two practical things.
 
-Esa separación reserva 16 bloques `/24` a cada capa, y tiene dos efectos prácticos.
+You can grow to 16 zones per tier without renumbering anything. If you go from 2 zones to 3 tomorrow, the new private subnet is `10.0.18.0/24`, which is already free. With tiers packed back to back, adding a zone would run into the next tier and existing subnets would have to move. In Terraform that means destroying and recreating them.
 
-Puedes crecer hasta 16 zonas por capa sin renumerar nada. Si mañana pasas de 2 zonas a 3, la nueva subred privada será `10.0.18.0/24`, que ya está libre. Con capas pegadas una detrás de otra, añadir una zona se metería en el rango de la siguiente y habría que mover subredes existentes. En Terraform eso significa destruirlas y recrearlas.
+And it reads faster during an incident. Seeing an address in a log tells you the tier from the third octet. 0 to 15 is public, 16 to 31 private, 32 to 47 data.
 
-Y se lee más rápido en una incidencia. Al ver una dirección en un log sabes de qué capa es por el tercer octeto. De 0 a 15 pública, de 16 a 31 privada, de 32 a 47 datos.
-
-La variable valida que los offsets sean múltiplos de 16, para que el esquema no se rompa por descuido.
+The variable validates that offsets are multiples of 16, so the scheme does not break by accident.
 
 ```hcl
 validation {
@@ -203,146 +222,138 @@ validation {
 }
 ```
 
-### Por qué subredes /24
+**Why `/24` subnets.** A `/24` holds 256 addresses. AWS reserves five in every subnet.
 
-Un `/24` tiene 256 direcciones. AWS reserva cinco en toda subred.
-
-| Dirección | Uso |
+| Address | Use |
 |---|---|
-| `.0` | Identificador de red |
-| `.1` | Router de la VPC |
-| `.2` | Servidor DNS de AWS |
-| `.3` | Reservada para uso futuro |
-| `.255` | Dirección de difusión |
+| `.0` | Network identifier |
+| `.1` | VPC router |
+| `.2` | AWS DNS server |
+| `.3` | Reserved for future use |
+| `.255` | Broadcast |
 
-Quedan 251 direcciones útiles por subred.
+That leaves 251 usable addresses per subnet.
 
-El compromiso va en las dos direcciones. Con subredes más pequeñas, como un `/26` de 59 direcciones útiles, te arriesgas a quedarte sin IPs. En Amazon EKS cada pod consume una dirección de la subred, y en Fargate cada tarea consume otra, así que la subred te limita la escala antes que la CPU o la memoria. Con subredes más grandes, como un `/20`, desperdicias espacio que quizá quieras para otras capas o entornos.
+The tradeoff cuts both ways. With smaller subnets, say a `/26` with 59 usable addresses, you risk running out of IPs. On Amazon EKS every pod consumes a subnet address, and on Fargate every task consumes one, so the subnet caps your scale before CPU or memory does. With larger subnets, say a `/20`, you burn address space you may want for other tiers or environments.
 
-> **Nota.** El tamaño se cambia tocando el segundo argumento de `cidrsubnet`. Hacerlo sobre una red ya desplegada implica recrear las subredes y todo lo que viva dentro.
+> **Note.** The size changes by editing the second argument of `cidrsubnet`. Doing that on a deployed network means recreating the subnets and everything living in them.
 
----
+### Egress without exposure
 
-## Salida a internet sin exposición
-
-La aplicación necesita salir a internet para bajar actualizaciones o llamar a APIs de terceros. Y nadie de fuera debe poder iniciar una conexión hacia ella. Son dos cosas distintas y se confunden a menudo.
+The application needs to reach the internet for updates and third party APIs. And nobody outside should be able to open a connection towards it. Those are two different things and they get conflated often.
 
 ```mermaid
 flowchart LR
-    subgraph PRIV["Capa privada · sin IP pública"]
-        APP["Aplicación"]
+    subgraph PRIV["Private tier · no public IP"]
+        APP["Application"]
     end
 
-    NAT["NAT Gateway<br/>capa pública"]
+    NAT["NAT Gateway<br/>public tier"]
     IGW["Internet Gateway"]
     NET(("Internet"))
     VPCE["Interface endpoints<br/>ssm · ssmmessages · ec2messages"]
-    SSM["API de SSM"]
+    SSM["SSM API"]
 
-    APP -->|"salida iniciada por la app"| NAT
+    APP -->|"connection started by the app"| NAT
     NAT --> IGW
     IGW --> NET
-    NET -.->|"no puede iniciar conexión<br/>hacia la aplicación"| NAT
-    APP -->|"443, sin salir de la VPC"| VPCE
+    NET -.->|"cannot open a connection<br/>towards the application"| NAT
+    APP -->|"443, never leaves the VPC"| VPCE
     VPCE --> SSM
 
     style PRIV fill:#1f2f42,stroke:#5b9bd5,color:#e8f0f8
 ```
 
-El NAT Gateway resuelve la primera mitad. Traduce las conexiones que salen y deja volver sus respuestas, pero no acepta nada que empiece fuera. Es asimétrico a propósito.
+The NAT Gateway covers the first half. It translates outbound connections and lets their replies back in, but it accepts nothing that starts outside. It is asymmetric on purpose.
 
-`nat_strategy` decide cuántos se despliegan.
+`nat_strategy` decides how many get deployed.
 
-| Valor | NAT desplegados | Si se cae una zona |
+| Value | NAT deployed | If one zone goes down |
 |---|---|---|
-| `none` | Ninguno | La capa privada nunca tiene salida |
-| `single` | Uno, en la primera zona | Si cae esa zona, todas las subredes privadas pierden la salida |
-| `per_az` | Uno por zona | Las demás zonas siguen funcionando |
+| `none` | None | The private tier never has egress |
+| `single` | One, in the first zone | If that zone drops, every private subnet loses egress |
+| `per_az` | One per zone | The other zones keep working |
 
-Las tablas de rutas privadas se crean por zona en los tres casos. Pasar de `single` a `per_az` es cambiar una variable, no rehacer el módulo.
+Private route tables are created per zone in all three cases. Moving from `single` to `per_az` is a variable change, not a rewrite.
 
----
+### SSH-free access with Session Manager
 
-## Administración sin SSH con Session Manager
+The traditional way into private subnets is a bastion host. An instance in the public subnet with port 22 reachable, from which you hop to everything else.
 
-Para entrar a máquinas en subredes privadas, lo tradicional es un bastión. Una instancia en la subred pública con el puerto 22 accesible, desde la que saltas al resto.
+That design drags a few things along.
 
-Ese diseño arrastra varias cosas.
+- Port 22 sits exposed to the internet and gets probed constantly
+- SSH keys have to be handed out, rotated, and revoked when someone leaves
+- The bastion is one more machine to patch and monitor
+- During an audit, knowing who reached which machine and what they ran depends on somebody having kept the bastion logs
 
-- El puerto 22 queda expuesto a internet y recibe intentos de acceso todo el rato
-- Hay que repartir claves SSH al equipo, rotarlas y revocarlas cuando alguien se va
-- El bastión es una máquina más que parchear y vigilar
-- Ante una auditoría, saber quién entró a qué máquina y qué ejecutó depende de que alguien haya guardado los registros del propio bastión
-
-Session Manager le da la vuelta a la dirección de la conexión.
+Session Manager flips the direction of the connection.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant OP as Operador
-    participant API as API de SSM
-    participant VPCE as Interface endpoint<br/>dentro de la VPC
-    participant EC2 as Instancia<br/>capa de datos, sin ruta a internet
+    participant OP as Operator
+    participant API as SSM API
+    participant VPCE as Interface endpoint<br/>inside the VPC
+    participant EC2 as Instance<br/>data tier, no route to the internet
 
-    Note over EC2,VPCE: El agente abre la conexión hacia FUERA.<br/>La instancia no escucha en ningún puerto.
-    EC2->>VPCE: HTTPS 443 saliente
-    VPCE->>API: el tráfico no abandona la VPC
+    Note over EC2,VPCE: The agent opens the connection OUTWARD.<br/>The instance listens on no port at all.
+    EC2->>VPCE: outbound HTTPS 443
+    VPCE->>API: traffic never leaves the VPC
 
     OP->>API: aws ssm start-session
-    Note over API: IAM decide si este<br/>operador puede entrar
-    API-->>VPCE: canal de sesión
-    VPCE-->>EC2: comandos
-    EC2-->>OP: salida de la terminal
+    Note over API: IAM decides whether this<br/>operator gets in
+    API-->>VPCE: session channel
+    VPCE-->>EC2: commands
+    EC2-->>OP: terminal output
 
-    Note over OP,EC2: CloudTrail registra quién abrió la sesión.<br/>El log de comandos puede volcarse a S3.
+    Note over OP,EC2: CloudTrail records who opened the session.<br/>Command logs can be shipped to S3.
 ```
 
-| | Bastión con SSH | Session Manager |
+| | SSH bastion | Session Manager |
 |---|---|---|
-| Puertos de entrada abiertos | 22, expuesto a internet | Ninguno |
-| Credenciales | Claves SSH que repartir y rotar | IAM, y al quitar el permiso el acceso se corta al momento |
-| Auditoría | Los registros del bastión, si se guardan | CloudTrail por sesión, con volcado opcional de comandos a S3 o CloudWatch |
-| Infraestructura extra | Una instancia que mantener y parchear | Ninguna |
-| Funciona sin salida a internet | No, salvo montajes adicionales | Sí, con interface endpoints |
+| Open inbound ports | 22, exposed to the internet | None |
+| Credentials | SSH keys to distribute and rotate | IAM, and revoking the permission cuts access immediately |
+| Audit trail | Bastion logs, if someone keeps them | CloudTrail per session, with optional command logging to S3 or CloudWatch |
+| Extra infrastructure | An instance to maintain and patch | None |
+| Works without internet egress | No, short of extra plumbing | Yes, through interface endpoints |
 
-El módulo despliega tres endpoints y los tres hacen falta.
+The module deploys three endpoints and all three are needed.
 
-| Endpoint | Para qué sirve |
+| Endpoint | What it carries |
 |---|---|
-| `ssm` | La API de Systems Manager |
-| `ssmmessages` | El canal de datos de la sesión interactiva |
-| `ec2messages` | La comunicación del agente con el servicio |
+| `ssm` | The Systems Manager API |
+| `ssmmessages` | The data channel for the interactive session |
+| `ec2messages` | The agent talking to the service |
 
-Estos endpoints son los que hacen que todo funcione en la capa de datos, que no tiene ruta a internet. El tráfico hacia la API de AWS entra por una interfaz de red que vive dentro de tu VPC y no pasa por la red pública.
+These endpoints are what makes this work on the data tier, which has no route to the internet. Traffic to the AWS API enters through a network interface living inside your own VPC and never touches the public network.
 
-> **Nota.** Session Manager necesita `enable_dns_support` y `enable_dns_hostnames` en la VPC. Sin resolución DNS, los endpoints no resuelven sus nombres privados y la sesión no se abre. Los dos están fijados en el módulo y hay una prueba que lo comprueba.
+> **Note.** Session Manager needs `enable_dns_support` and `enable_dns_hostnames` on the VPC. Without DNS resolution the endpoints do not resolve their private names and the session never opens. Both are pinned in the module and a test guards them.
 
----
+### Two barriers on the data tier
 
-## Las dos barreras de la capa de datos
-
-La capa de datos está protegida por dos mecanismos. No es la misma medida puesta dos veces.
+The data tier is protected by two mechanisms. It is not the same control applied twice.
 
 ```mermaid
 flowchart TB
-    T["Tráfico entrante"] --> N{"NACL de la subred<br/>¿el origen está dentro<br/>del CIDR de la VPC?"}
-    N -->|"no"| X1["Descartado en la frontera<br/>de la subred"]
-    N -->|"sí"| S{"Security group<br/>¿viene del sg de app<br/>por el puerto 5432?"}
-    S -->|"no"| X2["Descartado en la<br/>interfaz de red"]
-    S -->|"sí"| OK["Llega a la base de datos"]
+    T["Inbound traffic"] --> N{"Subnet NACL<br/>is the source inside<br/>the VPC CIDR?"}
+    N -->|"no"| X1["Dropped at the<br/>subnet boundary"]
+    N -->|"yes"| S{"Security group<br/>does it come from the app sg<br/>on port 5432?"}
+    S -->|"no"| X2["Dropped at the<br/>network interface"]
+    S -->|"yes"| OK["Reaches the database"]
 
     style X1 fill:#42272a,stroke:#c1666b,color:#f8ebec
     style X2 fill:#42272a,stroke:#c1666b,color:#f8ebec
     style OK fill:#1f3d2b,stroke:#4caf7d,color:#e8f5ee
 ```
 
-Se diferencian en tres cosas.
+They differ in three ways.
 
-**Dónde actúan.** La NACL filtra en la frontera de la subred, antes de que el paquete llegue a la máquina. El security group filtra en la interfaz de red de la instancia.
+**Where they act.** The NACL filters at the subnet boundary, before the packet reaches the machine. The security group filters at the instance network interface.
 
-**Quién los toca.** Alguien con permisos sobre EC2 puede cambiar un security group. La NACL se gestiona a nivel de red, que en una empresa con funciones separadas es otro equipo y otros permisos. Un error en un lado no atraviesa el otro.
+**Who can change them.** Anyone with EC2 permissions can edit a security group. NACLs are managed at the network layer, which in an organization with separated duties means a different team and different permissions. A mistake on one side does not cross the other.
 
-**Cómo se comportan.** El security group guarda estado, así que si permites la entrada, la respuesta sale sola. La NACL no guarda estado, y por eso hay que declarar la salida a mano. Es el detalle que más confunde la primera vez, y el motivo de que el módulo declare las dos direcciones.
+**How they behave.** Security groups are stateful, so allowing inbound traffic lets the reply out automatically. NACLs are stateless, which is why the outbound rule has to be written by hand. It is the detail that trips people up the first time, and the reason the module declares both directions.
 
 ```hcl
 resource "aws_network_acl_rule" "data_egress_vpc" {
@@ -355,32 +366,30 @@ resource "aws_network_acl_rule" "data_egress_vpc" {
 }
 ```
 
-Lo que no encaje con ninguna regla queda denegado por la regla implícita que cierra toda NACL y que no se puede quitar.
+Anything that matches no rule is denied by the implicit rule closing every NACL, which cannot be removed.
 
----
+### Terraform state on S3
 
-## El estado de Terraform en S3
+Terraform keeps a state file mapping what your code declares to what actually exists in AWS. It is how it knows that `aws_vpc.this` is `vpc-0b6e701a441c2648c`.
 
-Terraform guarda un archivo de estado con la correspondencia entre lo que declara tu código y lo que existe en AWS. Es lo que le permite saber que `aws_vpc.this` es `vpc-0b6e701a441c2648c`.
+By default that file sits next to the code. As soon as the project involves more than one person, that causes problems.
 
-Por defecto ese archivo se guarda junto al código. En cuanto el proyecto deja de ser de una sola persona, eso da problemas.
+- **Nobody else can work.** If the state lives on your laptop, a teammate running `apply` has no idea what exists and tries to create duplicates.
+- **There is no locking.** Two runs at once start from the same state and the last writer wins. You end up with orphaned resources Terraform no longer tracks.
+- **There is no backup.** The state is the only record of what you deployed. If it is corrupted or deleted, regaining control means importing resources one by one.
+- **It gets committed by accident.** The file holds values in clear text, including the ones you marked sensitive.
 
-- **Nadie más puede trabajar.** Si el estado está en tu portátil, un compañero que ejecute `apply` no sabe qué existe ya e intenta crear cosas duplicadas.
-- **No hay bloqueo.** Dos ejecuciones a la vez parten del mismo estado y la última en escribir pisa a la otra. Quedan recursos huérfanos que Terraform ya no controla.
-- **No hay copia de seguridad.** El estado es el único registro de lo que has desplegado. Si se corrompe o se borra, recuperar el control significa importar los recursos uno a uno.
-- **Se sube al repo sin querer.** El archivo tiene valores en claro, incluidos los que marques como sensibles.
+The `bootstrap/` stack creates an S3 bucket configured to close those gaps.
 
-El stack de `bootstrap/` crea un bucket de S3 configurado para tapar esos agujeros.
-
-| Configuración | Qué resuelve |
+| Setting | What it solves |
 |---|---|
-| Versionado | Cada `apply` deja recuperable la versión anterior, por si una escritura sale mal |
-| Cifrado en reposo | El estado tiene valores sensibles |
-| Bloqueo de acceso público | Evita que una policy mal escrita lo deje abierto |
-| Policy que deniega tráfico sin TLS | Rechaza cualquier acceso que no vaya cifrado |
-| `prevent_destroy` | Evita que un `terraform destroy` ahí borre el estado de todos los entornos |
+| Versioning | Every `apply` leaves the previous version recoverable, in case a write goes bad |
+| Encryption at rest | The state holds sensitive values |
+| Public access block | Stops a badly written policy from exposing it |
+| Policy denying non-TLS traffic | Rejects any access that is not encrypted in transit |
+| `prevent_destroy` | Stops a `terraform destroy` there from wiping every environment's state |
 
-El bloqueo de concurrencia se activa con una línea.
+Concurrency locking is one line.
 
 ```hcl
 terraform {
@@ -392,39 +401,28 @@ terraform {
 }
 ```
 
-> **Nota.** `use_lockfile` existe desde Terraform 1.11. Antes el bloqueo pedía una tabla de DynamoDB dedicada solo a eso. Si miras guías más viejas, verás esa tabla en todos los ejemplos.
+> **Note.** `use_lockfile` has been available since Terraform 1.11. Before that, locking required a DynamoDB table dedicated to nothing else. Older guides still show that table in every example.
 
-Cada entorno escribe en una ruta distinta del mismo bucket, que marca el atributo `key`. Dos configuraciones apuntando a la misma ruta compartirían estado, y un `apply` en una podría destruir los recursos de la otra.
+Each environment writes to a different path in the same bucket, set by the `key` attribute. Two configurations pointing at the same path would share state, and an `apply` in one could destroy the other's resources.
 
-El nombre del bucket no está en el código. Los nombres de bucket de S3 son únicos en todo AWS, no dentro de tu cuenta. Como el nombre lleva el identificador de cuenta, escribirlo en `backend.tf` haría que el repositorio solo funcionase en la cuenta de quien lo creó. Por eso el bloque `backend` se deja incompleto y los valores se pasan al inicializar, con un archivo `backend.hcl` que git ignora y del que se versiona una plantilla `.example`. La técnica se llama *partial backend configuration*. El backend se evalúa antes que las variables y los `locals`, así que no hay forma de calcular ese nombre dentro de Terraform.
-
----
-
-## Herramientas
-
-- **Terraform 1.11 o superior.** Hace falta esa versión por el bloqueo de estado nativo de S3. Las pruebas usan `terraform test`, que viene incluido.
-- **AWS CLI.** Para las credenciales y para abrir sesiones con `aws ssm start-session`.
-- **make.** Atajos de las tareas repetidas. `make help` los lista.
-- **Amazon Linux 2023.** La AMI de la instancia de demostración. Se resuelve con un data source, así que no hay ningún ID fijo en el código.
-
-El provider de AWS está fijado a la serie `~> 5.0`. Los archivos `.terraform.lock.hcl` están versionados, así que todo el mundo instala las mismas versiones.
+The bucket name is not in the code. S3 bucket names are unique across all of AWS, not within your account. Since the name carries the account id, writing it into `backend.tf` would make this repository work only in the account that created it. So the `backend` block is left incomplete and the values are passed at init time, through a `backend.hcl` file that git ignores and a versioned `.example` template. The technique is called partial backend configuration. The backend is evaluated before variables and locals, so there is no way to compute that name inside Terraform.
 
 ---
 
-## Antes de empezar
+## Running the project
 
-Necesitas Terraform 1.11 o superior, el AWS CLI configurado con credenciales válidas, y permisos para crear recursos de VPC, IAM, S3 y CloudWatch.
+### Requirements
+
+You need Terraform 1.11 or newer, the AWS CLI configured with valid credentials, and permission to create VPC, IAM, S3 and CloudWatch resources.
 
 ```bash
 terraform version
 aws sts get-caller-identity
 ```
 
----
+### Step 1. Try the module
 
-## Paso 1. Probar el módulo
-
-Antes de montar el backend remoto puedes desplegar la arquitectura entera con el ejemplo autocontenido. Guarda el estado en un archivo local y no necesita preparación.
+Before setting up the remote backend you can deploy the whole architecture with the self-contained example. It keeps state in a local file and needs no preparation.
 
 ```bash
 git clone git@github.com:Rxcxrdx/aws-three-tier-vpc-terraform.git
@@ -434,25 +432,23 @@ terraform init
 terraform apply
 ```
 
-Al terminar, mira lo que se creó.
+When it finishes, look at what was created.
 
 ```bash
 terraform output subnets_by_tier
 ```
 
-Para borrarlo.
+To remove it.
 
 ```bash
 terraform destroy
 ```
 
----
+### Step 2. Create the state bucket
 
-## Paso 2. Crear el bucket de estado
+This is done once per account. The `bootstrap/` stack creates the bucket where environments keep their state, including its own. That is a circular dependency, because the first run cannot use a bucket that does not exist yet. It is solved in two phases.
 
-Esto se hace una sola vez por cuenta. El stack de `bootstrap/` crea el bucket donde los entornos guardan su estado, incluido el suyo propio. Ahí hay una dependencia circular, porque la primera ejecución no puede usar un bucket que todavía no existe. Se resuelve en dos fases.
-
-**Fase 1.** Abre `bootstrap/backend.tf` y comenta el bloque `terraform { backend "s3" { ... } }`. Terraform usará un estado local.
+**Phase 1.** Open `bootstrap/backend.tf` and comment out the `terraform { backend "s3" { ... } }` block. Terraform will use local state.
 
 ```bash
 cd bootstrap
@@ -462,43 +458,39 @@ terraform apply
 terraform output -raw tfstate_bucket_name
 ```
 
-Apunta el nombre que sale del último comando.
+Write down the name that last command prints.
 
-**Fase 2.** Descomenta el bloque, prepara la configuración del backend y migra el estado al bucket que acabas de crear.
+**Phase 2.** Uncomment the block, prepare the backend configuration, and migrate the state into the bucket you just created.
 
 ```bash
 cp backend.hcl.example backend.hcl
-# edita backend.hcl con el nombre del bucket
+# edit backend.hcl with your bucket name
 
 terraform init -backend-config=backend.hcl -migrate-state
 ```
 
-Terraform ve que hay un estado local y te ofrece copiarlo al backend remoto. Si aceptas, el archivo local ya no sirve.
+Terraform notices the local state and offers to copy it to the remote backend. Once you accept, the local file is no longer needed.
 
----
-
-## Paso 3. Desplegar el entorno
+### Step 3. Deploy the environment
 
 ```bash
 cd ../envs/dev
 
 cp backend.hcl.example backend.hcl
-# el mismo bucket del paso anterior
+# the same bucket as the previous step
 
 terraform init -backend-config=backend.hcl
 terraform plan
 terraform apply
 ```
 
-Lee la salida de `plan` antes de aplicar. Debe crear la VPC, seis subredes, las tablas de rutas, el NAT Gateway, los tres endpoints de SSM, los security groups y la NACL.
+Read the `plan` output before applying. It should create the VPC, six subnets, the route tables, the NAT Gateway, the three SSM endpoints, the security groups and the NACL.
 
----
+### Step 4. Prove SSH-free access
 
-## Paso 4. Comprobar el acceso sin SSH
+The repository ships a demo that proves SSH-free access in the worst possible spot. An instance in the data subnet, with no route to the internet and no key pair.
 
-El repositorio trae una demostración que prueba el acceso sin SSH en el peor escenario posible. Una instancia en la subred de datos, que no tiene ruta a internet ni par de claves.
-
-Viene apagada porque es una comprobación puntual y no forma parte de la infraestructura.
+It is off by default because it is a one-off check, not part of the infrastructure.
 
 ```bash
 terraform apply -var enable_ssm_test=true
@@ -506,106 +498,133 @@ terraform apply -var enable_ssm_test=true
 aws ssm start-session --target $(terraform output -raw instance_id)
 ```
 
-Si la sesión se abre, has comprobado tres cosas de golpe. Que los endpoints resuelven, que el rol de IAM da los permisos correctos y que no hace falta ningún puerto de entrada. Para quitarla.
+If the session opens, you have proven three things at once. The endpoints resolve, the IAM role grants the right permissions, and no inbound port is required. To remove it.
 
 ```bash
 terraform apply -var enable_ssm_test=false
 ```
 
----
-
-## Limpieza
+### Cleanup
 
 ```bash
 cd envs/dev
 terraform destroy
 ```
 
-Los atajos equivalentes.
+The equivalent shortcuts.
 
 ```bash
-make nuke     # destruye el entorno
-make cost     # comprueba que no queda nada activo en la cuenta
+make nuke     # destroys the environment
+make cost     # checks nothing is left running in the account
 ```
 
-> **Nota.** El stack de `bootstrap/` no se destruye al terminar de trabajar. Guarda el estado de los entornos y lleva `prevent_destroy` justo para evitarlo.
+> **Note.** The `bootstrap/` stack is not destroyed at the end of a work session. It holds every environment's state and carries `prevent_destroy` for exactly that reason.
 
----
-
-## Pruebas
+### Tests
 
 ```bash
 terraform test
 ```
 
-La suite comprueba lo siguiente.
+The suite checks the following.
 
-- Que se crea una subred por cada combinación de capa y zona
-- Que los bloques CIDR salen con el offset esperado
-- Que las subredes de datos no asignan IP pública
-- Que la tabla de rutas de la capa de datos no tiene ninguna ruta hacia `0.0.0.0/0`
-- Que la resolución DNS sigue activa, porque Session Manager la necesita
-- Que las capas se referencian por security group y no por CIDR
-- Que el security group por defecto queda sin reglas
+- One subnet is created per tier and zone combination
+- CIDR blocks land on the expected offset
+- Data subnets do not assign public IPs
+- The data tier route table has no `0.0.0.0/0` route
+- DNS resolution is still on, because Session Manager depends on it
+- Tiers reference each other by security group and not by CIDR
+- The default security group ends up with no rules
 
-Las pruebas corren con `nat_strategy = "none"` y los endpoints apagados, así que la suite no deja infraestructura persistente.
+Tests run with `nat_strategy = "none"` and endpoints off, so the suite leaves no persistent infrastructure behind.
 
 ---
 
-## Decisiones de implementación
+## Technologies used
 
-**`for_each` con claves de texto en vez de `count`.** Con `count`, la identidad de un recurso en el estado es su posición en la lista. Si borras un elemento del medio, todos los siguientes se desplazan y Terraform destruye y recrea recursos que no habían cambiado. Con claves como `private-us-east-1a`, borrar una subred afecta solo a esa. A cambio, renombrar una clave sí fuerza la recreación. Por eso las claves se forman con capa y zona, que son los dos datos que no cambian nunca.
+- **Terraform 1.11 or newer.** That version is required for native S3 state locking. The suite uses `terraform test`, which ships with it.
+- **AWS provider `~> 5.0`.** Lock files are committed, so everyone installs the same versions.
+- **AWS CLI.** For credentials and for opening sessions with `aws ssm start-session`.
+- **make.** Shortcuts for the repetitive tasks. Run `make help` to list them.
+- **Amazon Linux 2023.** The AMI for the demo instance. It is resolved through a data source, so no image ID is hard coded.
 
-**Las zonas se consultan con un data source.** AWS reparte los nombres de zona de forma aleatoria por cuenta, así que `us-east-1a` puede ser una instalación física distinta en dos cuentas. Escribir los nombres a mano haría impredecible el reparto entre zonas al desplegar en otra cuenta.
+AWS services in play are VPC, EC2, IAM, S3, CloudWatch Logs and Systems Manager.
 
-**Los tags se usan como datos.** Las asociaciones de tablas de rutas y los outputs filtran por el tag `Tier`. La alternativa era interpretar el prefijo del nombre de la clave, y eso ata el módulo a un formato de texto que cualquiera puede cambiar.
+---
 
-**Las reglas de firewall son recursos sueltos.** `aws_vpc_security_group_ingress_rule` en vez de bloques `ingress` anidados hace que cada regla tenga su propia entrada en el estado. Añadir una no reescribe las demás, y el `plan` enseña exactamente cuál cambia.
+## Implementation decisions
 
-**El security group por defecto se vacía.** AWS crea uno con cada VPC que permite todo el tráfico entre los recursos que lo tengan puesto, y es el que reciben las instancias lanzadas sin especificar security group. Como no se puede borrar, el módulo lo adopta y lo deja sin reglas.
+**`for_each` with string keys instead of `count`.** With `count`, a resource identity in state is its position in the list. Delete an item in the middle and everything after it shifts, so Terraform destroys and recreates resources that did not change. With keys like `private-us-east-1a`, deleting one subnet touches only that one. The tradeoff is that renaming a key does force recreation, which is why keys are built from tier and zone, the two attributes that never change.
+
+**Availability zones come from a data source.** AWS randomizes zone names per account, so `us-east-1a` can be a different physical site in two accounts. Hard coding the names would make the spread across zones unpredictable when deploying into another account.
+
+**Tags are used as data.** Route table associations and outputs filter on the `Tier` tag. The alternative was parsing the key name prefix, which ties the module to a text format anyone can change.
+
+**Firewall rules are standalone resources.** `aws_vpc_security_group_ingress_rule` instead of nested `ingress` blocks gives every rule its own state entry. Adding one does not rewrite the others, and the plan shows exactly which one changed.
+
+**The default security group is emptied.** AWS creates one with every VPC that allows all traffic between resources carrying it, and it is the one instances get when launched without specifying a security group. It cannot be deleted, so the module adopts it and strips its rules.
+
+---
+
+## Troubleshooting
+
+**Apply fails creating the VPC endpoints outside `us-east-1`.** An endpoint service name contains the region. If it is hard coded, deploying elsewhere throws an error that never mentions the region as the cause. The module reads it with `data "aws_region"`, so it works anywhere.
+
+**Session Manager will not connect even though the endpoints exist.** Check `enable_dns_support` and `enable_dns_hostnames` on the VPC. Without them the endpoints do not resolve their private names. The symptom shows up well after the cause and the error says nothing about DNS.
+
+**A test fails with `Unknown condition value`.** The assertion depends on a value that is unknown until apply, such as a security group id. During plan it is known after apply. Run that test with `command = apply`, or rewrite the assertion against an attribute that is known at plan time.
+
+**A NAT Gateway is still running after interrupting the tests.** If a run is cut before teardown, whatever was created stays. Run `make cost` to find it. The tests use `nat_strategy = "none"` so this should not happen.
 
 ---
 
 ## Bugs
 
-Si algo no funciona o hay una parte confusa, abre una issue. Incluye lo siguiente.
+If something does not work, or a section is confusing, open an issue. Include the following.
 
-- el directorio donde pasó, por ejemplo `envs/dev` o `examples/minimal`
-- el comando que ejecutaste
-- la versión de Terraform y la del provider de AWS
-- qué esperabas ver
-- qué viste
-
----
-
-## Solución de problemas
-
-**El apply falla al crear los VPC endpoints fuera de `us-east-1`.** El nombre del servicio de un endpoint lleva la región dentro. Si está escrito fijo, desplegar en otra región da un error que no menciona la región como causa. El módulo la saca con `data "aws_region"`, así que funciona en cualquiera.
-
-**Session Manager no conecta aunque los endpoints existan.** Mira `enable_dns_support` y `enable_dns_hostnames` en la VPC. Sin ellos los endpoints no resuelven sus nombres privados. El síntoma aparece bastante después de la causa y el error no habla del DNS.
-
-**Una prueba falla con `Unknown condition value`.** La aserción depende de un valor que no se conoce hasta el `apply`, como el identificador de un security group. Durante el `plan` ese valor es *known after apply*. Ejecuta esa prueba con `command = apply`, o reescribe la aserción sobre un atributo que sí se conozca al planificar.
-
-**Queda un NAT Gateway activo después de interrumpir las pruebas.** Si una ejecución se corta antes del teardown, lo que se creó se queda. Ejecuta `make cost` para encontrarlo. Las pruebas usan `nat_strategy = "none"` para que eso no pase.
+- the directory where it happened, for example `envs/dev` or `examples/minimal`
+- the command you ran
+- your Terraform version and AWS provider version
+- what you expected to see
+- what you saw instead
 
 ---
 
-## Referencia
+## Author
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Rxcxrdx">
+        <img src="https://avatars.githubusercontent.com/u/87449520?v=4" width="100px" alt="Rxcxrdx avatar"><br>
+        <sub><b>Rxcxrdx</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+Questions and suggestions are welcome through GitHub issues.
+
+---
+
+## Repository layout
 
 ```
-├── bootstrap/          Bucket de estado versionado y cifrado. Se ejecuta una vez.
+├── bootstrap/          Versioned, encrypted state bucket. Run once.
 ├── modules/
-│   ├── network/        VPC, subredes, rutas, NAT, endpoints y flow logs
-│   └── security/       Security groups encadenados, NACL y default SG vaciado
-├── examples/minimal/   Despliegue autocontenido con estado local
-├── envs/dev/           Entorno con estado remoto en S3
-└── tests/              Suite de terraform test
+│   ├── network/        VPC, subnets, routes, NAT, endpoints and flow logs
+│   └── security/       Chained security groups, NACL and emptied default SG
+├── examples/minimal/   Self-contained deployment with local state
+├── envs/dev/           Environment with remote state on S3
+└── tests/              terraform test suite
 ```
 
-Cada módulo documenta sus entradas, sus salidas y sus compromisos de diseño.
+Each module documents its inputs, outputs and design tradeoffs.
 
 - [modules/network](modules/network/README.md)
 - [modules/security](modules/security/README.md)
 - [bootstrap](bootstrap/README.md)
 
-MIT. La licencia está en [LICENSE](LICENSE).
+## License
+
+MIT. The full text is in [LICENSE](LICENSE).
